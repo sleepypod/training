@@ -18,7 +18,7 @@ authorized private inputs. This bundle does not train, upload, or activate model
 
 Raw health exports, per-epoch data, databases, and fitted model artifacts belong
 outside Git. The retained aggregate evidence describes a single person and must
-be reviewed before public release. This repository has not been published.
+be reviewed before public release. The repository is hosted privately at [sleepypod/training](https://github.com/sleepypod/training).
 
 ## Validate
 
