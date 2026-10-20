@@ -3,13 +3,13 @@ type: "Research note"
 title: "Training and pod deployment"
 description: "Portable inference is feasible; training and activation remain separate."
 status: "draft"
-generated: {"by": "codex/gpt-6", "at": "2026-10-20T23:09:59.032076+00:00"}
+generated: {"by": "codex/gpt-6", "at": "2026-10-20T23:20:05.045039+00:00"}
 sources: [{"resource": "/references/training-run.md"}, {"resource": "Local 2026-10-20 pod benchmark of older core-fit four-feature forest; historical session record, harness not retained in this bundle"}]
 ---
 
 # Training and pod deployment
 
-Train offline using the source scripts and locked Python dependencies recorded in [provenance](../references/training-run.md). This repository currently owns research knowledge and aggregate evidence; the training implementation remains in core pending deliberate migration.
+Train offline using this repository’s `scripts/train.py`, Python 3.11 `uv.lock`, and Node 24 `package-lock.json`. The [runnable pipeline](runnable-pipeline.md) includes Watch parsing, production feature extraction, nested training, portable export, and TypeScript parity. Core runtime sources are pinned and hash-checked under `vendor/core/`. The original research run remains documented in [provenance](../references/training-run.md).
 
 The pod can directly evaluate an exported forest as JSON tree arrays through the TypeScript runtime. It needs the matching feature contract and postprocessing, not a Python training environment. Validate artifact schema, class/feature order, parity vectors, and resource use before activation. CoreML is an alternate client artifact, not necessary for pod inference.
 

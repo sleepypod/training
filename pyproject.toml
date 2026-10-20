@@ -1,5 +1,8 @@
 [project]
 name = "training-knowledge"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = ["PyYAML==6.0.2"]
+version = "0.2.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "PyYAML==6.0.2", "numpy==2.2.6", "scipy==1.15.3",
+  "scikit-learn==1.5.1", "joblib==1.5.2", "threadpoolctl==3.6.0",
+]
