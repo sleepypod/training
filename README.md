@@ -1,6 +1,6 @@
-# Sleepypod training
+# Training
 
-Research knowledge and aggregate evidence for sleep-stage model development.
+`sleepypod/training` — research knowledge and aggregate evidence for sleep-stage model development.
 Start at [the knowledge index](knowledge/index.md).
 
 The `knowledge/` directory is an Open Knowledge Format (OKF) v0.2 bundle,

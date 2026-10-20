@@ -38,7 +38,7 @@ wheels = [
 ]
 
 [[package]]
-name = "sleepypod-training-knowledge"
+name = "training-knowledge"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
