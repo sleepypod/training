@@ -1,0 +1,361 @@
+{
+  "groups": 11,
+  "sessions": 11,
+  "classCounts": {
+    "1": 482,
+    "2": 84,
+    "0": 18,
+    "3": 187
+  },
+  "scores": {
+    "existing_depth8": {
+      "epochs": 771,
+      "accuracy": 0.6238651102464332,
+      "kappa": 0.29006426539321284,
+      "macroF1": 0.40323822496236295,
+      "confusion": [
+        [
+          0,
+          4,
+          1,
+          13
+        ],
+        [
+          0,
+          356,
+          50,
+          76
+        ],
+        [
+          0,
+          47,
+          34,
+          3
+        ],
+        [
+          5,
+          86,
+          5,
+          91
+        ]
+      ],
+      "recall": {
+        "wake": 0.0,
+        "light": 0.7385892116182573,
+        "deep": 0.40476190476190477,
+        "rem": 0.48663101604278075
+      }
+    },
+    "balanced_leaf5": {
+      "epochs": 771,
+      "accuracy": 0.6238651102464332,
+      "kappa": 0.3239193867831819,
+      "macroF1": 0.41573302739267515,
+      "confusion": [
+        [
+          0,
+          4,
+          1,
+          13
+        ],
+        [
+          0,
+          333,
+          60,
+          89
+        ],
+        [
+          1,
+          43,
+          37,
+          3
+        ],
+        [
+          5,
+          65,
+          6,
+          111
+        ]
+      ],
+      "recall": {
+        "wake": 0.0,
+        "light": 0.6908713692946058,
+        "deep": 0.44047619047619047,
+        "rem": 0.5935828877005348
+      }
+    },
+    "balanced_leaf10": {
+      "epochs": 771,
+      "accuracy": 0.5875486381322957,
+      "kappa": 0.34360492822377264,
+      "macroF1": 0.45669775179155664,
+      "confusion": [
+        [
+          2,
+          4,
+          1,
+          11
+        ],
+        [
+          7,
+          261,
+          84,
+          130
+        ],
+        [
+          0,
+          20,
+          60,
+          4
+        ],
+        [
+          8,
+          39,
+          10,
+          130
+        ]
+      ],
+      "recall": {
+        "wake": 0.1111111111111111,
+        "light": 0.5414937759336099,
+        "deep": 0.7142857142857143,
+        "rem": 0.6951871657754011
+      }
+    },
+    "balanced_logistic": {
+      "epochs": 771,
+      "accuracy": 0.5201037613488976,
+      "kappa": 0.11945278714938778,
+      "macroF1": 0.36300701320840056,
+      "confusion": [
+        [
+          7,
+          5,
+          1,
+          5
+        ],
+        [
+          35,
+          323,
+          57,
+          67
+        ],
+        [
+          4,
+          45,
+          34,
+          1
+        ],
+        [
+          18,
+          126,
+          6,
+          37
+        ]
+      ],
+      "recall": {
+        "wake": 0.3888888888888889,
+        "light": 0.6701244813278008,
+        "deep": 0.40476190476190477,
+        "rem": 0.19786096256684493
+      }
+    },
+    "nested": {
+      "epochs": 771,
+      "accuracy": 0.5862516212710766,
+      "kappa": 0.3185158297820462,
+      "macroF1": 0.4167871089225875,
+      "confusion": [
+        [
+          0,
+          4,
+          1,
+          13
+        ],
+        [
+          7,
+          279,
+          76,
+          120
+        ],
+        [
+          0,
+          29,
+          50,
+          5
+        ],
+        [
+          8,
+          47,
+          9,
+          123
+        ]
+      ],
+      "recall": {
+        "wake": 0.0,
+        "light": 0.578838174273859,
+        "deep": 0.5952380952380952,
+        "rem": 0.6577540106951871
+      }
+    },
+    "rules": {
+      "epochs": 770,
+      "accuracy": 0.24415584415584415,
+      "kappa": -0.0040890402518400926,
+      "macroF1": 0.1756675567327701,
+      "confusion": [
+        [
+          7,
+          9,
+          1,
+          1
+        ],
+        [
+          219,
+          154,
+          59,
+          50
+        ],
+        [
+          51,
+          12,
+          9,
+          11
+        ],
+        [
+          83,
+          70,
+          16,
+          18
+        ]
+      ],
+      "recall": {
+        "wake": 0.3888888888888889,
+        "light": 0.31950207468879666,
+        "deep": 0.10843373493975904,
+        "rem": 0.0962566844919786
+      }
+    },
+    "always_light": {
+      "epochs": 771,
+      "accuracy": 0.6251621271076524,
+      "kappa": 0.0,
+      "macroF1": 0.1923383878691141,
+      "confusion": [
+        [
+          0,
+          18,
+          0,
+          0
+        ],
+        [
+          0,
+          482,
+          0,
+          0
+        ],
+        [
+          0,
+          84,
+          0,
+          0
+        ],
+        [
+          0,
+          187,
+          0,
+          0
+        ]
+      ],
+      "recall": {
+        "wake": 0.0,
+        "light": 1.0,
+        "deep": 0.0,
+        "rem": 0.0
+      }
+    }
+  },
+  "finalSelected": "balanced_leaf10",
+  "uncertainty": {
+    "meanNightMacroF1Difference": 0.00697126229289293,
+    "nightBootstrap95Percent": [
+      -0.02752717657077768,
+      0.04412147119234745
+    ],
+    "note": "Descriptive only: overlapping CV training sets make this approximate."
+  },
+  "artifact": {
+    "parityRows": 970,
+    "modelBytes": 877590,
+    "sha256": "e455a5487809e37104540c72d851bc67c919865226da9b6b04043056b4644afb"
+  },
+  "limitations": [
+    "Same-person retrospective reuse; a future night is required for prospective validation.",
+    "Whole-night normalization and centered windows are retrospective, not a live classifier.",
+    "Sparse awake labels; wake recall is not established.",
+    "Per-candidate outer scores are exploratory; nested score evaluates the selection procedure.",
+    "No upload or activation performed."
+  ],
+  "sourceCommit": "c9e5c5c037275d3e5a3c255efa2ff8801be13b79",
+  "sourceReportSha256": "d44c6ab6438a8be8640b046edb8caa6f4976ed5ba009eed42bfee7a7032bac79",
+  "protocol": {
+    "scriptSha256": "8280ff68594c75c565df49d7711161e9fa624284034b7bdb56d2a1297348f396",
+    "trainingHelpersSha256": "538d336d8d61718798abf2560704bb17f2bb62ddd3fd6b3023b0f4ad6303fb85",
+    "candidates": [
+      "existing_depth8",
+      "balanced_leaf5",
+      "balanced_leaf10",
+      "balanced_logistic"
+    ],
+    "outer": "leave-one-night-group-out",
+    "inner": "3-fold GroupKFold",
+    "objective": "macro F1 across all four classes, then kappa",
+    "preprocessing": "production TypeScript",
+    "prospective": false,
+    "inputSha256": "7d4d532827ad0095fe0b22c6ae6bbf368c3612422f6bffe976a1fa992f1d03e2"
+  },
+  "temporalAudit": {
+    "selected": "existing_depth8",
+    "scores": {
+      "existing_depth8": {
+        "epochs": 130,
+        "accuracy": 0.676923076923077,
+        "kappa": 0.3062261753494282,
+        "macroF1": 0.3888247112004018,
+        "confusion": [
+          [
+            0,
+            3,
+            0,
+            1
+          ],
+          [
+            0,
+            70,
+            6,
+            14
+          ],
+          [
+            0,
+            10,
+            2,
+            0
+          ],
+          [
+            0,
+            8,
+            0,
+            16
+          ]
+        ],
+        "recall": {
+          "wake": 0.0,
+          "light": 0.7777777777777778,
+          "deep": 0.16666666666666666,
+          "rem": 0.6666666666666666
+        }
+      }
+    }
+  },
+  "scope": "Single-person retrospective aggregate; no raw samples or per-night records."
+}
