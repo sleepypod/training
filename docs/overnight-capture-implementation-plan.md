@@ -8,6 +8,17 @@ Companion specification: [capture and training contract](overnight-capture.md).
 
 Determine whether snoring events detected locally by the iPhone coincide with distinctive vibrations in the pod's left and right raw piezo channels. Build synchronized capture, comparison, training, and eventually validated pod-only detection. Side attribution is a separate hypothesis to evaluate, not an assumed capability.
 
+## Sleep-staging learnings that shape this plan
+
+From [light-sleep confusion, 2026-10-21](../knowledge/evaluation/light-sleep-confusion-2026-10-21.md). One participant; descriptive, not demonstrated improvements.
+
+- The staging gap is light versus REM, then light versus deep. Held out, about half of Watch-REM and Watch-deep epochs are predicted light, and a quarter of light is predicted REM or deep. No current feature separates light from REM by more than about half a pooled standard deviation.
+- REM's distinguishing signals are short-timescale: breathing irregularity over 1–2 minutes and very low movement with variable heart rate. The current 15-minute breathing feature barely separates REM. Raw 500 Hz piezo capture (section 3) is therefore also the input for staging research, not only snoring; record that as a secondary objective.
+- Mean heart rate barely differs between sleep stages in current features. Capture should record per-epoch signal coverage and quality so missing or fallback values can be told apart from physiology.
+- Watch sleep stages are derived partly from the Watch's own accelerometer. Using Watch motion as a stage-model feature while Watch stages are the label risks learning the Watch algorithm rather than sleep. Treat Watch motion as a reference or diagnostic signal for staging unless an independent label source exists.
+- Snoring frequency is reported to differ by sleep stage in the literature. Whether pod-derived snore features help staging is a hypothesis to test under section 8, on the same held-out nights, reporting the light/REM and light/deep confusion cells, not only κ.
+- Sequence decoding, context features and partial class weighting need no new capture. Run them on existing data in parallel with this plan so capture-derived features are compared against the strongest pod-only baseline.
+
 ## 1. Shared recording contract
 
 - Assign session IDs, participant aliases, bed-side mappings, and device metadata.
