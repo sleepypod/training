@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Training · sleepypod research</title>
+    <style>
+      __CSS__
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to results</a>
+    <aside id="sidebar">
+      <div class="brand">
+        <span class="brand-mark">◒</span> sleepypod
+        <span class="muted">/ research</span>
+      </div>
+      <div class="section-label">
+        TRAINING RUNS <span id="run-count"></span>
+      </div>
+      <label class="sr-only" for="run-search">Search runs</label
+      ><input id="run-search" type="search" placeholder="Search runs…" /><label
+        class="sr-only"
+        for="run-filter"
+        >Filter runs</label
+      ><select id="run-filter">
+        <option value="all">All runs</option>
+        <option value="complete">Complete</option>
+        <option value="running">Running</option>
+        <option value="failed">Failed / interrupted</option>
+      </select>
+      <nav id="run-list" aria-label="Training runs"></nav>
+      <div class="sidebar-bottom">
+        <span class="dot"></span> Local workspace
+        <p>No model activation.<br />Your data stays on this computer.</p>
+        <button data-help="training">How training works ↗</button>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="run-header">
+        <div class="header-top">
+          <div>
+            <div class="section-label">SLEEP STAGE EXPERIMENT</div>
+            <h1 id="run-title">Training workspace</h1>
+          </div>
+          <span id="status" class="badge">Loading</span>
+          <div class="header-actions">
+            <label
+              >Layout
+              <select id="layout">
+                <option value="sidebar">Sidebar</option>
+                <option value="header">Compact</option>
+                <option value="inspector">Inspector</option>
+              </select></label
+            ><button id="learn">Learn the terms</button
+            ><a
+              id="download-report"
+              class="button hidden"
+              download="training-report.html"
+              >Save report ↓</a
+            >
+          </div>
+        </div>
+        <p class="meta" id="run-meta">
+          Select a run to explore its progress and results.
+        </p>
+        <div class="header-metrics">
+          <div><span>Elapsed</span><strong id="elapsed">—</strong></div>
+          <div>
+            <span
+              >Fit ETA
+              <button class="help" data-help="eta" aria-label="Explain fit ETA">
+                ?
+              </button></span
+            ><strong id="eta">—</strong>
+          </div>
+          <div>
+            <span
+              >Macro F1
+              <button
+                class="help"
+                data-help="macroF1"
+                aria-label="Explain Macro F1"
+              >
+                ?
+              </button></span
+            ><strong id="header-score" class="accent">—</strong>
+          </div>
+          <div class="run-switch">
+            <label for="run-select">Run history</label
+            ><select id="run-select"></select>
+          </div>
+        </div>
+        <div
+          id="pipeline"
+          class="pipeline"
+          aria-label="Training pipeline"
+        ></div>
+        <div class="status-detail">
+          <span id="detail" aria-live="polite"></span
+          ><span id="connection" role="status"></span>
+        </div>
+        <nav class="tabs" role="tablist" aria-label="Run views">
+          <button
+            id="tab-overview"
+            role="tab"
+            aria-selected="true"
+            aria-controls="overview"
+            data-tab="overview"
+          >
+            Overview</button
+          ><button
+            id="tab-nights"
+            role="tab"
+            aria-selected="false"
+            aria-controls="nights"
+            data-tab="nights"
+            tabindex="-1"
+          >
+            Nights</button
+          ><button
+            id="tab-data"
+            role="tab"
+            aria-selected="false"
+            aria-controls="data"
+            data-tab="data"
+            tabindex="-1"
+          >
+            Data</button
+          ><button
+            id="tab-log"
+            role="tab"
+            aria-selected="false"
+            aria-controls="log"
+            data-tab="log"
+            tabindex="-1"
+          >
+            Log
+          </button>
+        </nav>
+      </header>
+      <main id="content">
+        <div id="empty" class="panel hidden">
+          <h2>No runs yet</h2>
+          <p>
+            Start a training run from the terminal, or import a folder of
+            earlier runs.
+          </p>
+          <code
+            >uv run --locked python scripts/dashboard.py --import-root data
+            --port 8765</code
+          >
+        </div>
+        <section id="overview" role="tabpanel" aria-labelledby="tab-overview">
+          <div class="panel decision">
+            <div class="panel-heading">
+              <h2>
+                Readiness for review
+                <button
+                  class="help"
+                  data-help="readiness"
+                  aria-label="Explain readiness checks"
+                >
+                  ?
+                </button>
+              </h2>
+              <span id="verdict" class="badge">Waiting</span>
+            </div>
+            <p id="decision-summary"></p>
+            <div id="checks"></div>
+            <p class="footnote">
+              Research comparisons, not an automatic release decision.
+              Acceptance thresholds have not been agreed; prospective validation
+              is still required.
+            </p>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>
+                Held-out performance
+                <button
+                  class="help"
+                  data-help="heldout"
+                  aria-label="Explain held-out performance"
+                >
+                  ?
+                </button>
+              </h2>
+              <span id="performance-note" class="mono muted"></span>
+            </div>
+            <div id="scorecards" class="scorecards"></div>
+          </div>
+          <div id="overview-timeline"></div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>
+                Folds
+                <button
+                  class="help"
+                  data-help="fold"
+                  aria-label="Explain folds"
+                >
+                  ?
+                </button>
+              </h2>
+              <span class="muted">One night group held out at a time</span>
+            </div>
+            <div id="fold-pills" class="fold-pills"></div>
+            <div class="table-scroll">
+              <table id="fold-table" aria-label="Per-fold results"></table>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="panel">
+              <div class="panel-heading">
+                <h2>
+                  Per-stage F1
+                  <button
+                    class="help"
+                    data-help="f1"
+                    aria-label="Explain per-stage F1"
+                  >
+                    ?
+                  </button>
+                </h2>
+                <span class="muted">Held-out, pooled</span>
+              </div>
+              <div id="stage-scores"></div>
+              <p class="footnote">
+                Candidate selection is repeated inside each fold. The candidate
+                can differ between nights.
+              </p>
+            </div>
+            <div class="panel">
+              <div class="panel-heading">
+                <h2>
+                  Confusion vs Watch
+                  <button
+                    class="help"
+                    data-help="confusion"
+                    aria-label="Explain confusion matrix"
+                  >
+                    ?
+                  </button>
+                </h2>
+                <select id="matrix-model" aria-label="Confusion matrix model">
+                  <option value="nested">Candidate</option>
+                  <option value="existing_depth8">Baseline</option>
+                </select>
+              </div>
+              <div class="table-scroll">
+                <table id="matrix" aria-label="Confusion matrix"></table>
+              </div>
+              <p class="footnote">
+                Watch ↓ · Prediction → · Row-normalized. Watch is a reference,
+                not clinical ground truth.
+              </p>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="panel">
+              <div class="panel-heading">
+                <h2>
+                  Feature importance
+                  <button
+                    class="help"
+                    data-help="importance"
+                    aria-label="Explain feature importance"
+                  >
+                    ?
+                  </button>
+                </h2>
+              </div>
+              <div id="importance"></div>
+            </div>
+            <div class="panel" id="health-panel">
+              <div class="panel-heading">
+                <h2>Run health</h2>
+                <span id="health-state" class="muted"></span>
+              </div>
+              <div id="health" class="health-grid"></div>
+              <svg
+                id="fit-chart"
+                viewBox="0 0 500 140"
+                role="img"
+                aria-label="Seconds per completed fit"
+              ></svg>
+              <p class="footnote">
+                Last 80 fit durations. Measures work, not model quality. Memory
+                is the trainer’s recorded peak, not current system usage.
+              </p>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="panel">
+              <div class="panel-heading">
+                <h2>
+                  Config
+                  <button
+                    class="help"
+                    data-help="config"
+                    aria-label="Explain model configuration"
+                  >
+                    ?
+                  </button>
+                </h2>
+                <button data-open-tab="log">Full config →</button>
+              </div>
+              <div id="config-summary"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-heading"><h2>Run notes</h2></div>
+              <p id="notes"></p>
+              <div id="limitations"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>All model comparisons</h2>
+              <select
+                id="comparison-metric"
+                aria-label="Model comparison metric"
+              >
+                <option value="macroF1">Macro F1</option>
+                <option value="kappa">Cohen’s κ</option>
+                <option value="accuracy">Agreement vs Watch</option>
+              </select>
+            </div>
+            <div id="model-comparisons"></div>
+            <p class="footnote">
+              Individual candidate scores are exploratory. Rules may have a
+              different number of matched labels. Always light is a simple
+              reference that predicts light sleep every time.
+            </p>
+          </div>
+        </section>
+        <section
+          id="nights"
+          role="tabpanel"
+          aria-labelledby="tab-nights"
+          hidden
+        >
+          <div id="nights-timeline"></div>
+        </section>
+        <section id="data" role="tabpanel" aria-labelledby="tab-data" hidden>
+          <div id="intake" class="scorecards panel"></div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Data checks</h2>
+              <button
+                class="help"
+                data-help="coverage"
+                aria-label="Explain data coverage"
+              >
+                ?
+              </button>
+            </div>
+            <div id="data-checks"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>
+                Label balance per night
+                <button
+                  class="help"
+                  data-help="labels"
+                  aria-label="Explain labels"
+                >
+                  ?
+                </button>
+              </h2>
+            </div>
+            <div id="night-balance"></div>
+            <div class="legend" id="balance-legend"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>
+                Feature distributions
+                <button
+                  class="help"
+                  data-help="distribution"
+                  aria-label="Explain feature distributions"
+                >
+                  ?
+                </button>
+              </h2>
+              <label
+                >Compare night
+                <select id="drift-night"></select
+              ></label>
+            </div>
+            <div class="table-scroll">
+              <table
+                id="features"
+                aria-label="Feature distributions and drift"
+              ></table>
+            </div>
+            <p id="drift-note" class="footnote"></p>
+          </div>
+        </section>
+        <section id="log" role="tabpanel" aria-labelledby="tab-log" hidden>
+          <div id="failure" class="panel hidden">
+            <h2>Run stopped</h2>
+            <pre id="error"></pre>
+            <p>
+              Earlier artifacts are preserved. Correct the cause and start a
+              fresh run; resuming a partially fitted run is not supported.
+            </p>
+          </div>
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Activity log</h2>
+              <div class="controls">
+                <input
+                  id="log-search"
+                  type="search"
+                  placeholder="Filter activity…"
+                  aria-label="Filter activity log"
+                /><select id="log-phase" aria-label="Filter activity phase">
+                  <option value="">All phases</option></select
+                ><label
+                  ><input type="checkbox" id="follow" checked /> Follow</label
+                ><button id="load-log">Load full log</button
+                ><a
+                  id="download-log"
+                  class="button hidden"
+                  download="events.jsonl"
+                  >Download ↓</a
+                >
+              </div>
+            </div>
+            <div id="event-log" role="log" aria-label="Activity log"></div>
+            <p id="log-note" class="footnote"></p>
+          </div>
+          <div class="panel">
+            <h2>
+              Configuration & provenance
+              <button
+                class="help"
+                data-help="provenance"
+                aria-label="Explain provenance"
+              >
+                ?
+              </button>
+            </h2>
+            <p id="retry-note"></p>
+            <pre id="configuration"></pre>
+            <a
+              id="download-model"
+              class="button hidden"
+              download="candidate.json"
+              >Download candidate JSON ↓</a
+            >
+          </div>
+        </section>
+        <footer>
+          Local research · scikit-learn / NumPy / SciPy · Retrospective sleep
+          staging · No model activation
+        </footer>
+      </main>
+    </div>
+    <dialog id="help-dialog" aria-labelledby="help-title">
+      <div class="panel-heading">
+        <h2 id="help-title">Learn the terms</h2>
+        <button id="close-help" aria-label="Close explanations">✕</button>
+      </div>
+      <input
+        id="glossary-search"
+        type="search"
+        placeholder="Search a term…"
+        aria-label="Search explanations"
+      />
+      <div id="help-content"></div>
+    </dialog>
+    <script>
+      const embedded = __EMBEDDED__;
+    </script>
+    <script>
+      __JS__;
+    </script>
+  </body>
+</html>

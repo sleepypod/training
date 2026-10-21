@@ -10,6 +10,8 @@ import hashlib
 import importlib.util
 import json
 import time
+import resource
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,13 +55,16 @@ def fit(name, nights):
     update('Training', f'Fitting {name}: {len(x):,} rows × {x.shape[1]} features ({original_rows:,} before resampling)',
            completedFits=FIT_COUNT, currentFit={'model': name, 'originalRows': original_rows, 'rows': len(x), 'features': x.shape[1], 'matrixBytes': x.nbytes})
     started = time.perf_counter()
+    cpu_started = time.process_time()
     fitted = clf.fit(x, y)
     seconds = time.perf_counter() - started
     FIT_COUNT += 1
     trees = len(getattr(clf, 'estimators_', []))
     result = {'fit': FIT_COUNT, 'model': name, 'seconds': round(seconds, 4), 'rows': len(x), 'originalRows': original_rows,
               'rowsPerSecond': round(len(x) / max(seconds, 1e-9), 1), 'trees': trees,
-              'nodes': sum(t.tree_.node_count for t in getattr(clf, 'estimators_', []))}
+              'nodes': sum(t.tree_.node_count for t in getattr(clf, 'estimators_', [])),
+              'cpuPercent': round((time.process_time() - cpu_started) / max(seconds, 1e-9) * 100, 1),
+              'peakRssBytes': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == 'darwin' else 1024)}
     update('Training', f'{name}: {seconds:.3f}s · {result["rowsPerSecond"]:,.0f} rows/s · {trees} trees · {result["nodes"]:,} nodes', completedFits=FIT_COUNT, fitResult=result)
     return fitted
 
@@ -119,6 +124,28 @@ def inner_choice(nights, ruleset):
     return winner, scores
 
 
+def permutation_drops(clf, nights, ruleset, feature_names, repeats=3):
+    """Inspect selected models on outer held-out nights; never affects selection.
+
+    Shuffle within each session, preserve labels and row order for postprocessing.
+    Epochs are correlated: this is a descriptive sensitivity check, not causation.
+    """
+    baseline = metrics(*predict(clf, nights, ruleset))['macroF1']
+    rng = np.random.default_rng(42)
+    drops = {}
+    for column, name in enumerate(feature_names):
+        values = []
+        for _ in range(repeats):
+            shuffled = []
+            for night in nights:
+                x = np.asarray([r['x'] for r in night['rows']], dtype=float).copy()
+                x[:, column] = rng.permutation(x[:, column])
+                shuffled.append({**night, 'rows': [{**row, 'x': vector.tolist()} for row, vector in zip(night['rows'], x)]})
+            values.append(baseline - metrics(*predict(clf, shuffled, ruleset))['macroF1'])
+        drops[name] = values
+    return drops
+
+
 def export(clf, name, dataset, output, score):
     kind = 'logistic' if name == 'balanced_logistic' else 'forest'
     xs = np.array([r['x'] for n in dataset['nights'] for r in n['rows']])
@@ -165,6 +192,7 @@ def main():
     update("Training", "Starting nested whole-night evaluation", completedFits=0, totalFits=len(groups) * 16 + 27, completedFolds=0, totalFolds=len(groups))
     folds = []
     for group in groups:
+        fold_started = time.perf_counter()
         update('Training', f'Outer night {len(folds) + 1}/{len(groups)}: selecting on training nights only', evaluationStage='nested selection', outerFold=len(folds) + 1)
         train = [n for n in nights if n['group'] != group]
         held = [n for n in nights if n['group'] == group]
@@ -177,7 +205,12 @@ def main():
             outputs[name][0].extend(y)
             outputs[name][1].extend(p)
             fold['scores'][name] = metrics(y, p)
+            if name == 'existing_depth8':
+                timelines.add_predictions(traces, held, fitted, name, 'baseline', ruleset, postprocess)
+                timelines.save(traces, args.out)
             if name == winner:
+                update('Training', 'Measuring held-out feature sensitivity', evaluationStage='permutation diagnostics')
+                fold['permutationDrops'] = permutation_drops(fitted, held, ruleset, data['features'])
                 timelines.add_predictions(traces, held, fitted, name, 'heldOut', ruleset, postprocess)
                 timelines.save(traces, args.out)
                 outputs['nested'][0].extend(y)
@@ -189,7 +222,9 @@ def main():
         rule_rows = [r for r in labeled if r['rule'] is not None]
         outputs['rules'][0].extend(r['y'] for r in rule_rows)
         outputs['rules'][1].extend(r['rule'] for r in rule_rows)
+        fold['seconds'] = time.perf_counter() - fold_started
         folds.append(fold)
+        update('Training', 'Completed fold details', foldResult=fold)
         update("Training", f"Held-out night {len(folds)}/{len(groups)} complete: {winner} · macro F1 {fold['scores'][winner]['macroF1']:.3f}", completedFolds=len(folds), heldOutResult={'fold': len(folds), 'selected': winner, 'macroF1': fold['scores'][winner]['macroF1'], 'kappa': fold['scores'][winner]['kappa'], 'epochs': fold['scores'][winner]['epochs'], 'baselineMacroF1': fold['scores']['existing_depth8']['macroF1']})
     scores = {name: metrics(y, p) for name, (y, p) in outputs.items()}
     # A chronological audit, also retrospective: last two groups were already
@@ -216,7 +251,11 @@ def main():
     timelines.save(traces, args.out)
     update('Export', 'Verifying portable export against sklearn')
     artifact = export(clf, final_name, data, args.out, scores['nested'])
-    report = dict(protocol=protocol, groups=len(groups), sessions=len(nights),
+    importance = {'method': 'Held-out permutation importance · Δ macro F1',
+        'values': {name: float(np.mean([drop for fold in folds for drop in fold['permutationDrops'][name]])) for name in data['features']},
+        'std': {name: float(np.std([drop for fold in folds for drop in fold['permutationDrops'][name]])) for name in data['features']},
+        'repeats': 3, 'note': 'Three shuffles per feature within each held-out session; mean score drop across night groups and repeats. Spread is one standard deviation across those drops, not a confidence interval. Correlated inputs can share importance; descriptive, never used for selection.'}
+    report = dict(featureImportance=importance, protocol=protocol, groups=len(groups), sessions=len(nights),
         classCounts=dict(Counter(outputs['nested'][0])),
         watchEpochs=sum(n['watchEpochs'] for n in nights), folds=folds, scores=scores,
         finalSelected=final_name, finalInnerScores=final_inner, temporalAudit=temporal, uncertainty=uncertainty, artifact=artifact,

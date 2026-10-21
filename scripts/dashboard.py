@@ -1,108 +1,128 @@
-"""Self-contained report and a read-only loopback progress viewer."""
+"""Local training workspace, persistent run history, and self-contained offline reports."""
+import argparse
+from functools import lru_cache
 import json
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+import time
 from urllib.parse import urlsplit
 
-TEMPLATE = r'''<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sleepypod · Training</title>
-<style>
-:root{color-scheme:dark;--bg:#10191d;--panel:#18262c;--line:#30434a;--muted:#a4b7bd;--ink:#f1f7f4;--mint:#86e2b5}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}main{max-width:1160px;margin:auto;padding:40px 24px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:32px}.eyebrow{font-size:12px;letter-spacing:.16em;color:var(--mint);text-transform:uppercase}h1{font-size:38px;line-height:1.15;margin:10px 0}h2{font-size:19px;margin:0 0 18px}p{color:var(--muted)}.badge{border:1px solid var(--line);padding:6px 13px;border-radius:24px;font-size:13px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;margin-bottom:20px}.steps{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px}.step{border-radius:7px;padding:7px 13px;background:#101c22;color:var(--muted)}.active{color:#10291c;background:var(--mint)}.line{display:flex;justify-content:space-between;gap:16px;align-items:center}.large{font-size:25px;font-weight:650}progress{width:100%;height:12px;accent-color:var(--mint);margin-top:15px}.detail{min-height:24px;margin-top:12px;color:var(--muted)}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:20px 0}.card{border:1px solid var(--line);border-radius:12px;padding:17px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}.value{font-size:27px;margin-top:5px}.grid{display:grid;grid-template-columns:1.15fr 1fr;gap:20px}select{color:var(--ink);background:#101c22;border:1px solid #48616b;border-radius:7px;padding:8px;max-width:100%}.barrow{display:grid;grid-template-columns:145px 1fr 48px;gap:12px;align-items:center;margin:15px 0;font-size:13px}.track{height:15px;border-radius:4px;background:#0e1b20}.bar{height:100%;border-radius:4px;background:#6d9ba9}.bar.nested{background:var(--mint)}table{width:100%;border-collapse:separate;border-spacing:4px;font-variant-numeric:tabular-nums}th{font-size:12px;color:var(--muted);font-weight:500}td{text-align:center;border-radius:5px;padding:9px}.note{font-size:13px;color:var(--muted)}.notice{border-left:3px solid var(--mint);padding-left:14px}.hidden{display:none}footer{color:var(--muted);font-size:12px;margin:20px 0}#connection{color:#e3b77e}.failed{color:#ffaaa2}@media(max-width:750px){header{align-items:flex-start}.grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,1fr)}main{padding:25px 15px}h1{font-size:30px}.barrow{grid-template-columns:125px 1fr 45px}}
-.telemetry-cards .value{font-size:20px;overflow-wrap:anywhere}.telemetry-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.telemetry-table{overflow-x:auto}.event-log{height:250px;overflow:auto;background:#0e191e;padding:14px;border-radius:8px;font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.chart{width:100%;height:155px;display:block}.feature-table td{text-align:right;padding:5px;font-size:12px}.feature-table td:first-child{text-align:left}.classbar{display:flex;height:20px;border-radius:5px;overflow:hidden;margin:12px 0}.telemetry-grid .panel{min-width:0}.micro{font-size:12px;color:var(--muted)}@media(max-width:750px){.telemetry-grid{grid-template-columns:1fr}.cards.telemetry-cards{grid-template-columns:repeat(2,1fr)}}
-.timeline-controls{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:18px}.timeline-controls label{display:grid;gap:5px;color:var(--muted);font-size:12px}.timeline-scroll{overflow-x:auto}.hypnogram{display:block;width:100%;min-width:700px;height:auto}.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;margin:14px 0}.legend span::before{content:' ';display:inline-block;background:var(--stage);width:10px;height:10px;margin-right:6px;border-radius:2px}.epoch-detail{padding:12px;background:#0e191e;border-radius:8px;color:var(--ink);min-height:48px;font-size:13px}button{background:#20363e;color:var(--ink);border:1px solid var(--line);padding:7px 12px;border-radius:6px;cursor:pointer}button:disabled{opacity:.4;cursor:default}.timeline-stats{display:flex;gap:20px;flex-wrap:wrap;margin:14px 0}.timeline-stats strong{color:var(--ink)}
-</style></head><body><main>
-<header><div><div class="eyebrow">Sleepypod / Research</div><h1>Training, in view.</h1><div class="note">Completed-night sleep staging · local experiment</div></div><span class="badge" id="status">Preparing</span></header>
-<section class="panel" aria-label="Live progress"><div class="steps" id="steps"></div><div class="line"><div class="large" id="phase">Preparing</div><span id="elapsed">0s</span></div><progress id="progress" aria-label="Model fits completed"></progress><div class="detail" id="detail" aria-live="polite"></div><div class="note" id="connection"></div></section>
-<section class="panel" id="sleep-comparison" aria-label="Sleep-stage comparison">
-<h2>The same night, side by side</h2>
-<p class="note" id="timeline-wait">Sleep timelines appear after feature extraction. Model predictions fill in as each held-out night completes.</p>
-<div id="timeline-body" class="hidden">
-<div class="timeline-controls"><label>Sleep session<select id="timeline-night"></select></label><label>Model predictions<select id="timeline-mode"><option value="heldOut">Held-out night · validation</option><option value="final">Final model · fitted on these nights</option></select></label></div>
-<div id="timeline-note" class="note notice"></div>
-<div class="legend"><span style="--stage:#e9be88">Wake</span><span style="--stage:#d38dbc">REM</span><span style="--stage:#82b7eb">Light</span><span style="--stage:#777bd0">Deep</span><span style="--stage:#f3a17c">Pod / model disagreement</span></div>
-<div class="timeline-scroll"><svg id="hypnogram" class="hypnogram" viewBox="0 0 1000 430" role="img" aria-label="Aligned Pod, model, and Watch sleep stages"></svg></div>
-<div class="timeline-stats" id="timeline-stats"></div>
-<div class="line"><button id="epoch-prev" aria-label="Previous epoch">← Previous</button><span class="note">Hover or select an interval to compare</span><button id="epoch-next" aria-label="Next epoch">Next →</button></div><div id="epoch-detail" class="epoch-detail" aria-live="polite"></div>
-<details><summary>Exact aligned epochs</summary><div class="telemetry-table"><table id="epoch-table" aria-label="Exact epoch comparison"></table></div></details>
-<p class="micro">Shared five-minute epochs. Pod and Watch stages are sampled at epoch midpoints; gaps and ambiguous labels stay empty. Times use the pod timezone. Disagreement does not establish which prediction is correct.</p>
-</div></section>
-<section aria-label="Live telemetry" id="telemetry">
-<div class="cards telemetry-cards" id="telemetry-cards"></div><p class="micro" id="source-counts"></p>
-<div class="telemetry-grid">
-<section class="panel"><h2>Work per fit</h2><svg id="fit-chart" class="chart" viewBox="0 0 500 150" role="img" aria-label="Fit duration in seconds"></svg><p class="micro" id="fit-summary">Waiting for the first model fit…</p><p class="micro">Seconds per completed fit · most recent 80 fits. Rows/s measures fit throughput, not sensor sampling rate.</p></section>
-<section class="panel"><h2>Held-out night scores</h2><svg id="fold-chart" class="chart" viewBox="0 0 500 150" role="img" aria-label="Per-night held-out macro F1"></svg><p class="micro">Green: nested-selected candidate · Blue: existing depth-8 baseline. Each point is a different night, not a learning curve. Early points are incomplete evaluation.</p></section>
-<section class="panel"><h2>Data entering the model</h2><div id="classbar" class="classbar"></div><div id="class-counts" class="micro">Feature statistics appear after extraction.</div><div class="telemetry-table"><table id="features-table" class="feature-table" aria-label="Descriptive feature statistics"></table></div><p class="micro">Descriptive statistics across this run; never fed into model selection. Feature scales differ. Matrix size is float64 storage, not process memory.</p></section>
-<section class="panel"><div class="line"><h2>Activity</h2><label class="micro"><input id="follow-log" type="checkbox" checked> Follow</label></div><div id="event-log" class="event-log" role="log" aria-label="Recent activity"></div><p class="micro">Latest 120 events shown. The complete structured log is saved as events.jsonl.</p></section>
-</div></section>
-<section id="results" class="hidden"><div class="cards" id="cards"></div><div class="grid"><section class="panel"><div class="line"><h2>Model comparison</h2><select id="metric" aria-label="Comparison metric"><option value="macroF1">Macro F1</option><option value="kappa">Cohen’s κ</option><option value="accuracy">Accuracy</option></select></div><div id="bars"></div><p class="note">Nested selection evaluates the selection procedure. Individual candidates are exploratory comparisons. Counts may differ for the rules baseline.</p></section><section class="panel"><h2>Where predictions land</h2><select id="model" aria-label="Confusion matrix model"></select><p class="note">Rows: Watch reference · Columns: model prediction</p><table id="matrix" aria-label="Confusion matrix"></table><p class="note" id="recall"></p></section></div><section class="panel"><h2>Interpretation</h2><div id="interpretation" class="notice"></div></section></section>
-<section id="waiting" class="panel"><h2>One night held out at a time</h2><p>Candidate selection happens inside each training fold. Model comparisons and per-stage results appear when evaluation finishes.</p><p class="note">A progress bar measures completed model fits—not model quality. Watch labels are a reference, not clinical ground truth.</p></section><footer>Data stays on this computer. This viewer cannot activate models or control the pod.</footer>
-</main><script>
-const embedded=__EMBEDDED__;
-let report=embedded.report;let state=embedded.state||{};let timelineData=null;let selectedEpoch=0;
-const names={existing_depth8:'Existing depth 8',balanced_leaf5:'Balanced leaf 5',balanced_leaf10:'Balanced leaf 10',balanced_logistic:'Logistic',nested:'Nested selection',rules:'Rules (replay)',always_light:'Always light'};
-const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toFixed(3);
-function progress(s){state=s;telemetry(s);$('status').textContent=s.status||'Preparing';$('status').className='badge '+(s.status==='failed'?'failed':'');$('phase').textContent=s.phase||'Preparing';$('detail').textContent=(s.detail||'Starting the experiment…')+(s.phase==='Training'&&s.totalFolds?' · '+(s.completedFolds||0)+'/'+s.totalFolds+' night folds · '+(s.completedFits||0)+'/'+s.totalFits+' fits':'');$('elapsed').textContent=Math.round(s.status==='running' && s.startedAt ? Date.now()/1000-s.startedAt : s.elapsedSeconds||0)+'s';const p=$('progress');if(s.status==='complete'){p.max=1;p.value=1}else if(s.phase==='Training'&&s.totalFits){p.max=s.totalFits;p.value=s.completedFits||0}else if(s.phase==='Fetching'&&s.totalSessions){p.max=s.totalSessions;p.value=s.fetchedSessions||0}else p.removeAttribute('value');$('steps').replaceChildren(...['Fetching','Features','Training','Parity','Complete'].map(name=>{const e=document.createElement('span');e.className='step '+(name===s.phase?'active':'');e.textContent=name;return e}));}
-function results(r){if(!r)return;report=r;$('results').classList.remove('hidden');$('waiting').classList.add('hidden');$('cards').replaceChildren(...[['Night groups',r.groups],['Labeled epochs',Object.values(r.classCounts).reduce((a,b)=>a+b,0)],['Nested macro F1',fmt(r.scores.nested.macroF1)],['Nested κ',fmt(r.scores.nested.kappa)]].map(([label,value])=>{const c=document.createElement('div');c.className='card';const l=document.createElement('div');l.className='label';l.textContent=label;const v=document.createElement('div');v.className='value';v.textContent=value;c.append(l,v);return c}));if(!$('model').options.length){for(const key of Object.keys(r.scores)){const o=new Option(names[key]||key,key);$('model').add(o)}$('model').value='nested'}draw();$('interpretation').replaceChildren();const details=[`Final candidate: ${names[r.finalSelected]||r.finalSelected}. Fitted on all available nights for future evaluation; no model has been activated.`,...r.limitations];if(state.status!=='complete')details.unshift('Training report is available; final pipeline/parity checks are not yet confirmed.');for(const text of details){const p=document.createElement('p');p.className='note';p.textContent=text;$('interpretation').append(p)}}
-function draw(){if(!report)return;const metric=$('metric').value;$('bars').replaceChildren(...Object.entries(report.scores).map(([key,s])=>{const row=document.createElement('div');row.className='barrow';const name=document.createElement('span');name.textContent=names[key]||key;name.title=s.epochs+' scored epochs';const track=document.createElement('div');track.className='track';const bar=document.createElement('div');bar.className='bar '+(key==='nested'?'nested':'');bar.style.width=Math.max(0,Math.min(1,s[metric]||0))*100+'%';track.append(bar);const value=document.createElement('span');value.textContent=fmt(s[metric]);row.append(name,track,value);return row}));const score=report.scores[$('model').value],stages=['Wake','Light','Deep','REM'];const table=$('matrix');table.replaceChildren();const h=document.createElement('tr');for(const text of ['',...stages]){const th=document.createElement('th');th.textContent=text;h.append(th)}table.append(h);score.confusion.forEach((row,i)=>{const tr=document.createElement('tr');const th=document.createElement('th');th.textContent=stages[i];tr.append(th);const sum=row.reduce((a,b)=>a+b,0);row.forEach(v=>{const td=document.createElement('td');td.textContent=v;td.style.background=`rgba(134,226,181,${sum ? 0.08 + 0.48*v/sum : 0.08})`;tr.append(td)});table.append(tr)});$('recall').textContent='Recall: '+Object.entries(score.recall).map(([k,v])=>k+' '+(v==null?'n/a':Math.round(v*100)+'%')).join(' · ')}
+from run_history import Catalog, local_data_roots, read_json
 
-function node(tag, text, cls){const e=document.createElement(tag);if(text!=null)e.textContent=text;if(cls)e.className=cls;return e}
-function svgElement(tag,attrs){const e=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v]of Object.entries(attrs))e.setAttribute(k,v);return e}
-function chart(id,series,ceiling,label){const svg=$(id);svg.replaceChildren();const all=series.flatMap(s=>s.values);if(!all.length){const t=svgElement('text',{x:20,y:75,fill:'#a4b7bd','font-size':13});t.textContent='Waiting for completed measurements…';svg.append(t);return}const max=ceiling||Math.max(...all,0.001),count=Math.max(...series.map(s=>s.values.length));for(const ratio of [0,.5,1]){const y=125-ratio*110;svg.append(svgElement('line',{x1:42,x2:485,y1:y,y2:y,stroke:'#30434a'}));const text=svgElement('text',{x:2,y:y+4,fill:'#a4b7bd','font-size':11});text.textContent=(max*ratio).toFixed(2);svg.append(text)}for(const seriesItem of series){const points=seriesItem.values.map((v,i)=>[42+(count===1?0:i/(count-1))*443,125-v/max*110]);svg.append(svgElement('polyline',{points:points.map(p=>p.join(',')).join(' '),fill:'none',stroke:seriesItem.color,'stroke-width':2}));points.forEach(([x,y],i)=>{const circle=svgElement('circle',{cx:x,cy:y,r:3,fill:seriesItem.color});const title=svgElement('title',{});title.textContent=`${seriesItem.name} ${i+1}: ${seriesItem.values[i].toFixed(3)}`;circle.append(title);svg.append(circle)})}const text=svgElement('text',{x:42,y:146,fill:'#a4b7bd','font-size':11});text.textContent=label;svg.append(text)}
-function telemetry(s){if(s.dataCounts)$('source-counts').textContent='Unique input rows: '+s.dataCounts.vitals.toLocaleString()+' vitals · '+s.dataCounts.movement.toLocaleString()+' movement · '+s.dataCounts.referenceStages.toLocaleString()+' Watch intervals. Download volume includes repeated API replies during pagination.';const transfer=s.transfer,ds=s.dataset,fit=s.fitResult;const kb=n=>(n/1024).toFixed(1)+' KiB';const cards=[['Downloaded',transfer?kb(transfer.bytes):'—'],['Transfer average',transfer?kb(transfer.bytesPerSecond)+'/s':'—'],['API requests',transfer?.requests??'—'],['Feature epochs',ds?ds.rows.toLocaleString():'—'],['Last fit',fit?fit.seconds.toFixed(3)+'s':'—'],['Fit rows / second',fit?Math.round(fit.rowsPerSecond).toLocaleString():'—'],['Trees / nodes',fit?fit.trees+' / '+fit.nodes.toLocaleString():'—'],['Feature matrix',ds?kb(ds.matrixBytes):'—']];$('telemetry-cards').replaceChildren(...cards.map(([label,value])=>{const c=node('div',null,'card');c.append(node('div',label,'label'),node('div',value,'value'));return c}));chart('fit-chart',[{name:'Fit duration',color:'#86e2b5',values:(s.fitHistory||[]).map(f=>f.seconds)}],null,'Completed fits →');const held=s.heldOutHistory||[];chart('fold-chart',[{name:'Selected',color:'#86e2b5',values:held.map(f=>f.macroF1)},{name:'Baseline',color:'#7aa9e0',values:held.map(f=>f.baselineMacroF1)}],1,'Completed held-out nights →');if(s.currentFit)$('fit-summary').textContent=(names[s.currentFit.model]||s.currentFit.model)+' · '+s.currentFit.rows.toLocaleString()+' fit rows ('+s.currentFit.originalRows.toLocaleString()+' before resampling) × '+s.currentFit.features+' features · '+(s.evaluationStage||'training');if(ds){$('classbar').replaceChildren(...Object.entries(ds.classes).map(([name,count],i)=>{const part=node('div');part.style.width=(ds.labeled?count/ds.labeled*100:0)+'%';part.style.background=['#e9be88','#82b7eb','#777bd0','#d38dbc'][i];part.title=name+': '+count;return part}));$('class-counts').textContent=Object.entries(ds.classes).map(([k,v])=>k+' '+v).join(' · ')+' · '+ds.unlabeled+' unlabeled context epochs · extraction '+ds.rowsPerSecond.toLocaleString()+' epochs/s';const table=$('features-table');table.replaceChildren();const head=node('tr');for(const h of ['Feature','Min','Mean','Max','σ'])head.append(node('th',h));table.append(head);for(const c of ds.columns){const row=node('tr');for(const value of [c.name,...[c.min,c.mean,c.max,c.std].map(v=>v.toFixed(3))])row.append(node('td',value));table.append(row)}}const log=$('event-log');log.textContent=(s.events||[]).map(e=>String(e.elapsedSeconds.toFixed(1)).padStart(6)+'s  '+e.phase.padEnd(10)+' '+e.detail).join('\n');if($('follow-log').checked)log.scrollTop=log.scrollHeight}
+UI = Path(__file__).with_name('ui')
 
 
-const stageNames=['Wake','Light','Deep','REM'],stageColors=['#e9be88','#82b7eb','#777bd0','#d38dbc'],stageLevels=[0,2,3,1];
-function timeLabel(seconds,withDate=false){return new Intl.DateTimeFormat('en',{timeZone:timelineData.timeZone,...(withDate?{month:'short',day:'numeric'}:{}),hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(seconds*1000))}
-function timelines(data){if(!data?.sessions?.length)return;timelineData=data;$('timeline-wait').classList.add('hidden');$('timeline-body').classList.remove('hidden');const select=$('timeline-night'),previous=select.value;select.replaceChildren(...data.sessions.map(n=>new Option(timeLabel(n.start,true)+' – '+timeLabel(n.end)+' · '+n.id,n.id)));if(data.sessions.some(n=>n.id===previous))select.value=previous;else select.value=data.sessions[0].id;drawTimeline()}
-function currentSession(){return timelineData?.sessions.find(n=>n.id===$('timeline-night').value)}
-function showEpoch(index){const n=currentSession();if(!n)return;selectedEpoch=Math.max(0,Math.min(n.rows.length-1,index));const row=n.rows[selectedEpoch],mode=$('timeline-mode').value;const label=v=>v==null?'No data':stageNames[v];$('epoch-detail').textContent=timeLabel(row.start)+'–'+timeLabel(row.end)+' · Pod: '+label(row.pod)+' · Model: '+label(row[mode])+' · Watch: '+label(row.watch);$('epoch-prev').disabled=selectedEpoch===0;$('epoch-next').disabled=selectedEpoch===n.rows.length-1;const cursor=$('epoch-cursor');if(cursor){const x=96+(row.start-n.start)/(n.end-n.start)*880;cursor.setAttribute('x',x);cursor.setAttribute('width',Math.max(1,(row.end-row.start)/(n.end-n.start)*880))}}
-function drawTimeline(){const n=currentSession();if(!n)return;const mode=$('timeline-mode').value,model=n[mode+'Model'];$('timeline-note').textContent=(mode==='heldOut'?'Validation: this session’s entire night group was excluded from fitting and model selection. ':'In-sample preview: the final model was fitted on these nights. This view is not held-out validation. ')+(model?'Model: '+(names[model]||model)+'. ':'Predictions pending for this view. ')+(timelineData.podSource==='pod-api'?'Pod lane: actual API stages captured at acquisition.':'Pod lane: local replay of captured rules; not a live pod API trace.')+' Times: '+timelineData.timeZone+'.';const svg=$('hypnogram');svg.replaceChildren();const x=t=>96+(t-n.start)/(n.end-n.start)*880;const tracks=[['pod',timelineData.podSource==='pod-api'?'Pod · captured':'Pod rules · replay'],[mode,mode==='heldOut'?'New model · held out':'New model · final fit'],['watch','Apple Watch']];tracks.forEach(([key,title],track)=>{const top=25+track*120;const name=svgElement('text',{x:0,y:top,fill:'#f1f7f4','font-size':14,'font-weight':600});name.textContent=title;svg.append(name);for(const stage of [0,3,1,2]){const y=top+22+stageLevels[stage]*19;svg.append(svgElement('line',{x1:96,x2:976,y1:y,y2:y,stroke:'#30434a'}));const text=svgElement('text',{x:0,y:y+4,fill:'#a4b7bd','font-size':11});text.textContent=stageNames[stage];svg.append(text)}let previous=null;for(const row of n.rows){const value=row[key];if(value==null){previous=null;continue}const y=top+22+stageLevels[value]*19;if(previous&&previous.end===row.start&&previous.stage!==value)svg.append(svgElement('line',{x1:x(row.start),x2:x(row.start),y1:top+22+stageLevels[previous.stage]*19,y2:y,stroke:stageColors[value],'stroke-width':1,opacity:.55}));const line=svgElement('line',{x1:x(row.start),x2:x(row.end),y1:y,y2:y,stroke:stageColors[value],'stroke-width':6});const tooltip=svgElement('title',{});tooltip.textContent=title+' '+timeLabel(row.start)+' '+stageNames[value];line.append(tooltip);svg.append(line);previous={end:row.end,stage:value}}});let compared=0,different=0,watchModel=0,modelCorrect=0,watchPod=0,podCorrect=0;for(const [i,row]of n.rows.entries()){if(row.pod!=null&&row[mode]!=null){compared++;if(row.pod!==row[mode]){different++;svg.append(svgElement('rect',{x:x(row.start),y:370,width:Math.max(1,x(row.end)-x(row.start)),height:7,fill:'#f3a17c'}))}}if(row.watch!=null&&row[mode]!=null){watchModel++;modelCorrect+=row.watch===row[mode]}if(row.watch!=null&&row.pod!=null){watchPod++;podCorrect+=row.watch===row.pod}const hit=svgElement('rect',{x:x(row.start),y:30,width:Math.max(1,x(row.end)-x(row.start)),height:350,fill:'transparent',cursor:'crosshair'});hit.addEventListener('pointerenter',()=>showEpoch(i));hit.addEventListener('click',()=>showEpoch(i));svg.append(hit)}for(let i=0;i<=6;i++){const t=n.start+(n.end-n.start)*i/6;const text=svgElement('text',{x:x(t),y:405,fill:'#a4b7bd','font-size':11,'text-anchor':i===0?'start':i===6?'end':'middle'});text.textContent=timeLabel(t);svg.append(text)}svg.append(svgElement('rect',{id:'epoch-cursor',x:96,y:30,width:1,height:350,fill:'#ffffff',opacity:.07,'pointer-events':'none'}));const stats=[['Pod vs model',compared?`${different}/${compared} disagree`:'Waiting for overlap'],['Model vs Watch',watchModel?`${Math.round(modelCorrect/watchModel*100)}% · ${watchModel} epochs`:'No matched labels'],['Pod vs Watch',watchPod?`${Math.round(podCorrect/watchPod*100)}% · ${watchPod} epochs`:'No matched labels']];$('timeline-stats').replaceChildren(...stats.map(([label,value])=>{const el=node('div',null,'micro');el.append(node('div',label),node('strong',value));return el}));const table=$('epoch-table');table.replaceChildren();const heading=node('tr');for(const t of ['Start','End','Pod','Model','Watch'])heading.append(node('th',t));table.append(heading);for(const row of n.rows){const tr=node('tr');for(const value of [timeLabel(row.start),timeLabel(row.end),...[row.pod,row[mode],row.watch].map(v=>v==null?'—':stageNames[v])])tr.append(node('td',value));table.append(tr)}showEpoch(selectedEpoch)}
-$('timeline-night').addEventListener('change',()=>{selectedEpoch=0;drawTimeline()});$('timeline-mode').addEventListener('change',drawTimeline);$('epoch-prev').addEventListener('click',()=>showEpoch(selectedEpoch-1));$('epoch-next').addEventListener('click',()=>showEpoch(selectedEpoch+1));timelines(embedded.timelines);
+@lru_cache(maxsize=12)
+def _diagnostics(path, modified, size):
+    from diagnostics import describe
+    data = read_json(path)
+    return describe(data) if data else None
 
-$('metric').addEventListener('change',draw);$('model').addEventListener('change',draw);progress(state);results(report);
-let lastProgress='',lastTimeline='',lastReport='',pollTimer=null;
-async function poll(){
- if(document.hidden)return;
- try{
-  const r=await fetch('progress.json',{cache:'no-store'});if(!r.ok)throw Error();
-  const text=await r.text();if(text!==lastProgress){progress(JSON.parse(text));lastProgress=text}
-  $('connection').textContent='';
-  for(const [path,kind] of [['model/timelines.json','timeline'],['model/report.json','report']]){
-   try{const response=await fetch(path,{cache:'no-store'});if(!response.ok)continue;const text=await response.text();
-    if(kind==='timeline'&&text!==lastTimeline){timelines(JSON.parse(text));lastTimeline=text}
-    if(kind==='report'&&text!==lastReport){results(JSON.parse(text));lastReport=text}
-   }catch{}
-  }
-  if(['failed','cancelled'].includes(state.status)||(state.status==='complete'&&report))clearInterval(pollTimer);
- }catch{$('connection').textContent='Live connection unavailable. Showing the last saved state.'}
-}
-if(location.protocol!=='file:'){pollTimer=setInterval(poll,1200);poll()}
 
-</script></body></html>'''
+def payload(output, key=None):
+    root = Path(output)
+    features = root / 'features.json'
+    diagnostics = None
+    if features.is_file():
+        stat = features.stat()
+        try:
+            diagnostics = _diagnostics(str(features), stat.st_mtime_ns, stat.st_size)
+        except (ValueError, KeyError, TypeError):
+            diagnostics = {'error': 'Historical feature data cannot be summarized'}
+    traces = read_json(root / 'model/timelines.json')
+    # Older traces did not embed inputs. Join by timestamp without synthesizing predictions.
+    if traces and 'features' not in traces and features.is_file():
+        data = read_json(features, {})
+        traces['features'] = data.get('features', [])
+        by_id = {str(n['id']): {r['start']: r['x'] for r in n['rows']} for n in data.get('nights', [])}
+        for night in traces['sessions']:
+            for row in night['rows']:
+                row['x'] = by_id.get(night['id'], {}).get(row['start'])
+    return {'id': key, 'name': root.name, 'state': read_json(root / 'progress.json', {}),
+            'report': read_json(root / 'model/report.json'), 'timelines': traces,
+            'diagnostics': diagnostics, 'config': read_json(root / 'run.json', {}),
+            'protocol': read_json(root / 'model/protocol.json', {}),
+            'error': (root / 'error.txt').read_text() if (root / 'error.txt').is_file() else None}
+
+
+def html(data):
+    embedded = json.dumps(data, allow_nan=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    return (UI / 'dashboard.html').read_text().replace('__CSS__', (UI / 'dashboard.css').read_text()).replace('__JS__', (UI / 'dashboard.js').read_text()).replace('__EMBEDDED__', embedded)
 
 
 def write_report(output):
-    output = Path(output)
-    def read(relative):
-        p = output / relative
-        return json.loads(p.read_text()) if p.exists() else None
-    data = json.dumps({'state': read('progress.json'), 'report': read('model/report.json'), 'timelines': read('model/timelines.json')}, allow_nan=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
-    (output / 'index.html').write_text(TEMPLATE.replace('__EMBEDDED__', data))
-
-
-def serve(output):
     root = Path(output)
+    temp = root / 'index.html.tmp'
+    temp.write_text(html(payload(root)))
+    temp.replace(root / 'index.html')
+
+
+def serve(output=None, catalog=None, port=0):
+    catalog = catalog or Catalog()
+    key = catalog.register(output) if output else None
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            name = urlsplit(self.path).path
-            allowed = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'), '/progress.json': ('progress.json', 'application/json'), '/model/report.json': ('model/report.json', 'application/json'), '/model/timelines.json': ('model/timelines.json', 'application/json')}
-            if name not in allowed or not (root / allowed[name][0]).is_file():
+            path = urlsplit(self.path).path
+            kind = 'application/json'
+            data = None
+            if path in ('/', '/index.html'):
+                kind = 'text/html'
+                data = html({'initialRun': key}).encode()
+            elif path == '/api/runs':
+                data = json.dumps(catalog.list(), allow_nan=False).encode()
+            elif path.startswith('/api/runs/'):
+                parts = path.split('/')
+                root = catalog.resolve(parts[3])
+                if root and root.is_dir() and len(parts) in (4, 5):
+                    if len(parts) == 4:
+                        doc = payload(root, parts[3])
+                        entry = next((r for r in catalog.list() if r['id'] == parts[3]), None)
+                        if entry: doc['state']['status'] = entry['status']
+                        data = json.dumps(doc, allow_nan=False).encode()
+                    elif parts[4] == 'report':
+                        kind = 'text/html'; data = html(payload(root)).encode()
+                    elif parts[4] in ('events', 'candidate'):
+                        artifact = root / ('events.jsonl' if parts[4] == 'events' else 'model/candidate.json')
+                        if artifact.is_file():
+                            data = artifact.read_bytes()
+                            kind = 'application/x-ndjson' if parts[4] == 'events' else 'application/json'
+            elif output:
+                legacy = {'/progress.json': 'progress.json', '/model/report.json': 'model/report.json', '/model/timelines.json': 'model/timelines.json'}
+                if path in legacy and (Path(output) / legacy[path]).is_file(): data = (Path(output) / legacy[path]).read_bytes()
+            if data is None:
                 self.send_error(404); return
-            path, kind = allowed[name]
-            data = (root / path).read_bytes()
-            self.send_response(200);self.send_header('Content-Type', kind + '; charset=utf-8');self.send_header('Cache-Control', 'no-store');self.send_header('Content-Length', str(len(data)));self.end_headers();self.wfile.write(data)
+            self.send_response(200)
+            self.send_header('Content-Type', kind + '; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            try: self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError): pass
         def log_message(self, *args): pass
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--run', type=Path, help='Open an existing run without retraining')
+    ap.add_argument('--import-root', type=Path, action='append', default=[], help='Discover historical run folders under this directory')
+    ap.add_argument('--catalog', type=Path, help='Override the shared local SQLite catalog')
+    ap.add_argument('--port', type=int, default=8765)
+    args = ap.parse_args()
+    catalog = Catalog(args.catalog)
+    catalog.discover(local_data_roots() + args.import_root)
+    server = serve(args.run, catalog, args.port)
+    print(f'Training workspace: http://127.0.0.1:{server.server_port}', flush=True)
+    try:
+        while True: time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown(); server.server_close()
+
+
+if __name__ == '__main__': main()

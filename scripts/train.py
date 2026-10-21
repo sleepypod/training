@@ -3,6 +3,10 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 import os
+import json
+import shlex
+import traceback
+import importlib.metadata
 import subprocess
 import sys
 import time
@@ -12,12 +16,32 @@ from dashboard import serve, write_report
 from fetch_pod import fetch
 from progress import update
 from telemetry import summarize_features
+from run_history import Catalog, local_data_roots, primary_root
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(*command):
-    subprocess.run(command, cwd=ROOT, check=True)
+    process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        for line in process.stdout:
+            print(line, end='', flush=True)
+            if os.environ.get('TRAINING_PROGRESS'):
+                with Path(os.environ['TRAINING_PROGRESS']).with_name('process.log').open('a') as log:
+                    log.write(line)
+        if process.wait():
+            raise subprocess.CalledProcessError(process.returncode, command)
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+    finally:
+        process.stdout.close()
 
 
 def main():
@@ -34,7 +58,9 @@ def main():
     ap.add_argument('--timezone', help='IANA timezone; default from pod, required with --snapshot')
     ap.add_argument('--verbose', action='store_true', help='Keep every progress event as a terminal log line')
     ap.add_argument('--dashboard', action='store_true', help='Serve a live loopback dashboard; stays open until Ctrl-C')
-    ap.add_argument('--out', type=Path, default=ROOT / 'data/runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
+    ap.add_argument('--name', help='Human-readable experiment name')
+    ap.add_argument('--notes', default='', help='Hypothesis or changes for this run')
+    ap.add_argument('--out', type=Path, default=primary_root() / 'data/runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     args = ap.parse_args()
     if not 1 <= args.days <= 365: ap.error('--days must be between 1 and 365')
     if args.snapshot and not (args.watch_export or args.watch_json): ap.error('--snapshot requires --watch-export or --watch-json')
@@ -47,14 +73,23 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     os.environ['TRAINING_PROGRESS'] = str(output / 'progress.json')
     if args.verbose: os.environ['TRAINING_VERBOSE'] = '1'
+    metadata = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+    metadata['environment'] = {'python': sys.version.split()[0], **{name: importlib.metadata.version(name) for name in ('scikit-learn', 'numpy', 'scipy')}}
+    metadata.update(pid=os.getpid(), command=shlex.join(['uv', 'run', '--locked', 'python', 'scripts/train.py', *sys.argv[1:]]))
+    (output / 'run.json').write_text(json.dumps(metadata, indent=2))
     update('Preparing', 'Starting local training pipeline')
+    catalog = Catalog()
+    catalog.discover(local_data_roots())
+    catalog.register(output)
     write_report(output)
-    server = serve(output) if args.dashboard else None
+    server = serve(output, catalog) if args.dashboard else None
     if server: print(f'Live dashboard: http://127.0.0.1:{server.server_port} (Ctrl-C to close)', flush=True)
     try:
         if args.pod:
             snapshot, pod_watch, args.timezone = fetch(args.pod, args.side, args.days, output, args.timezone, fetch_watch=watch is None)
             watch = watch or pod_watch
+            metadata['timezone'] = args.timezone
+            (output / 'run.json').write_text(json.dumps(metadata, indent=2))
         tsx = str(ROOT / 'node_modules/.bin/tsx')
         if args.watch_export:
             update('Labels', 'Extracting Watch reference stages')
@@ -74,6 +109,9 @@ def main():
         write_report(output)
         print(f'Report: {output / "index.html"}', flush=True)
     except (Exception, KeyboardInterrupt) as error:
+        process_log = output / 'process.log'
+        tail = '\n'.join(process_log.read_text().splitlines()[-80:]) if process_log.exists() else ''
+        (output / 'error.txt').write_text(tail + '\n' + traceback.format_exc())
         update('Stopped', str(error) or 'Interrupted by user', status='cancelled' if isinstance(error, KeyboardInterrupt) else 'failed')
         write_report(output)
         raise

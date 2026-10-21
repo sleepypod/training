@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 
 from dashboard import serve, write_report
+from run_history import Catalog
 from progress import update
 
 
@@ -24,7 +25,8 @@ class DashboardTests(unittest.TestCase):
     def test_loopback_viewer_does_not_serve_private_inputs(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); (root / 'features.json').write_text('private')
-            write_report(root); server = serve(root)
+            (root / 'progress.json').write_text('{"status": "complete"}')
+            write_report(root); server = serve(root, Catalog(root / 'catalog.sqlite'))
             try:
                 base = f'http://127.0.0.1:{server.server_port}'
                 self.assertEqual(urllib.request.urlopen(base).status, 200)
@@ -42,6 +44,7 @@ class DashboardTests(unittest.TestCase):
             state = json.loads((Path(d) / 'progress.json').read_text())
             self.assertEqual(state['completedFits'], 4)
             self.assertEqual(state['status'], 'failed')
+            self.assertEqual(state['stoppedFrom'], 'Training')
             self.assertFalse((Path(d) / 'progress.tmp').exists())
 
 

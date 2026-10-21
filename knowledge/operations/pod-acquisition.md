@@ -3,7 +3,7 @@ type: "Training workflow"
 title: "Pod acquisition and visual progress"
 description: "Read-only LAN fetching, live progress, and local reports."
 status: "draft"
-generated: {"by": "codex/gpt-6", "at": "2026-10-21T06:17:04.078716+00:00"}
+generated: {"by": "codex/gpt-6", "at": "2026-10-21T07:29:50.644349+00:00"}
 sources: [{"resource": "sleepypod/training: scripts/fetch_pod.py, scripts/train.py, scripts/dashboard.py, scripts/progress.py"}, {"resource": "sleepypod/core: src/server/routers/biometrics.ts and src/biometrics/profiles/overview.ts; inspected API contract on 2026-10-20"}]
 ---
 
@@ -27,4 +27,33 @@ The sleep comparison now aligns three stage lanes (Pod, new model, Watch) on a s
 
 Private `model/timelines.json` preserves every feature epoch, including unlabeled context and prediction gaps. The nested-selected model predicts each held-out night without training on that night group; the final fitted model has a separate, explicitly in-sample view. Postprocessing matches scoring. The chart uses the pod StageTrace conventions: Wake / REM / Light / Deep ordering and no interpolation across gaps. Watch and captured pod stages are sampled at shared five-minute epoch midpoints, not displayed at their original finer boundaries.
 
-Session selection, exact epoch inspection, and disagreement highlights support visual comparison. Matched counts accompany per-night agreement percentages; missing/ambiguous labels are not filled in or scored as wake. Completed dashboards stop polling and unchanged payloads are not redrawn.
+Session selection, exact epoch inspection, and disagreement highlights support visual comparison. Matched counts accompany per-night agreement percentages; missing/ambiguous labels are not filled in or scored as wake. Completed run details stop polling; the workspace still refreshes its run list. Unchanged payloads are not redrawn.
+
+
+The training workspace now has Overview / Nights / Data / Log tabs, historical
+run search and filtering, and contextual plain-language explanations. The
+primary checkout's ignored SQLite catalog references run directories and survives
+viewer restarts. Discovery scans only repository/worktree data roots or explicit
+`--import-root` roots. Imports preserve artifacts. Archived results without a
+pipeline status do not imply parity passed; stale legacy running states are shown
+as interrupted without rewriting evidence.
+
+New evaluations save baseline held-out predictions separately from nested-selected
+and final in-sample predictions. Overview includes per-night hypnograms and sleep
+architecture; duration bars use exactly the shared available epochs for all
+shown sources. They do not infer validated sleep-cycle boundaries. Old missing
+traces or resource measurements remain unavailable.
+
+Additional diagnostics include fold times, environment/configuration/notes,
+per-fit CPU and peak trainer RSS, and held-out permutation sensitivity (three
+within-session shuffles per feature, mean and spread across night groups and
+repeats). Sequential postprocessing matches scoring. Diagnostics do not affect
+selection. Feature histograms, skew and per-night two-sample KS comparisons are
+derived from retained features; their p-values are unadjusted and correlated
+epochs violate independence assumptions, so they are descriptive only.
+
+The visual design's mock promotion thresholds and invented commands were not
+adopted as policy. Review checks summarize actual evidence, with no automatic
+ship verdict. Future untouched nights and agreed acceptance criteria remain
+required. Saved reports embed one run and work offline; the live viewer supplies
+history. See README.md for commands and import behavior.

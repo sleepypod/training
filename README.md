@@ -73,6 +73,68 @@ Aggregate “Rules (replay)” metrics still use the pinned local rules engine.
 The current rules are applied retrospectively; they do not reconstruct historical
 per-sample rule versions. Raw responses and reports remain under ignored `data/`.
 
+## Reopen runs and explore the training workspace
+
+```sh
+uv run --locked python scripts/dashboard.py --port 8765
+```
+
+Open `http://127.0.0.1:8765`. This starts only the viewer; it never retrains.
+The workspace discovers earlier run directories under this repository's `data/`
+and its Git worktrees, and keeps a persistent SQLite catalog at the primary
+checkout's ignored `data/run-history.sqlite`. New training runs register
+there automatically. `--out` still requires a fresh directory; the default is
+now the primary checkout's `data/runs/`, shared across worktrees.
+
+Use `--run data/runs/example` to open a specific existing run, or add
+`--import-root /path/to/old/runs` (repeatable) to discover runs stored elsewhere.
+Importing registers paths; it does not move, overwrite, or fabricate artifacts.
+Keep imported folders in place. `--catalog data/another.sqlite` selects a
+separate catalog. The viewer serves only selected report artifacts and never
+serves raw snapshots or arbitrary files. Historical runs with stale running
+state and no known live process are labeled interrupted, without editing their
+saved state. Runs with a report but no pipeline status are archived, not assumed
+to have passed parity.
+
+The design is organized around a run sidebar, sticky pipeline header, and four tabs:
+
+- **Overview:** held-out scores, review checks, four-lane stage comparison,
+  small hypnograms for every night, sleep architecture, fold results, per-stage
+  F1, confusion matrices, feature importance, resource measurements, and notes.
+- **Nights:** Pod / candidate / baseline / Watch aligned on one axis, a night
+  picker, candidate-vs-Watch or candidate-vs-Pod disagreement navigation,
+  per-epoch inputs, exact stages, and matched stage-duration comparisons.
+- **Data:** intake, label coverage, per-night balance, feature histograms and
+  descriptive distribution comparisons. Missing raw sensor readings cannot be
+  inferred from finite feature values because some features use fallback values.
+- **Log:** filterable activity, full event loading/download, captured failure
+  details, configuration/provenance, and a candidate download. No activation.
+
+Sidebar, compact-header and wide-screen inspector layouts are available. Every
+technical term has contextual help or a searchable **Learn the terms** entry,
+including macro F1, kappa, depth, leaves, cross-validation, and all input features.
+The same help, tabs and plots work in exported self-contained HTML reports.
+Offline reports contain one run; the running workspace supplies history.
+
+New runs record baseline traces, fold details, environment versions, command,
+notes, per-fit CPU and peak trainer RSS, and three-repeat held-out permutation
+importance using the same sequential postprocessing as scoring. These descriptive
+measurements never affect candidate selection. Historical missing measurements
+are shown as unavailable, not reconstructed through new fits. Feature distributions
+can be derived from retained feature files without retraining.
+
+Sleep architecture uses the intersection of epochs present in every displayed
+source, including Watch. All bars therefore share a denominator; gaps are not
+filled as wake. Hypnograms show stage sequences, not validated cycle boundaries.
+Final-fit views are explicitly in-sample. Bootstrap intervals concern the mean
+night-level improvement, not the pooled score difference. Review checks are not
+release gates: promotion thresholds have not been agreed.
+
+Add `--name 'Leaf experiment' --notes 'Hypothesis and changes'` to `train.py`
+to label a run. Failure tracebacks and subprocess output remain in ignored
+`error.txt` / `process.log`. There is no fabricated resume or promote command;
+correct a failure and retry into a new output directory.
+
 ## Train with your data
 
 Put local inputs in `data/`. Only `data/.gitkeep` is tracked; all other contents,
@@ -138,6 +200,8 @@ uv run --locked python scripts/validate_knowledge.py
 uv run --locked python scripts/check-vendor.py
 uv run --locked python -m unittest discover -s scripts -p 'test_*.py'
 npm run typecheck
+node --check scripts/ui/dashboard.js
+node --test scripts/test-dashboard.mjs
 uv run --locked python scripts/make-synthetic-inputs.py data/smoke-inputs
 uv run --locked python scripts/train.py \
   --snapshot data/smoke-inputs/biometrics.db --watch-export data/smoke-inputs/export.zip \

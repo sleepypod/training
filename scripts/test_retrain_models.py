@@ -48,6 +48,19 @@ class RetrainingTests(unittest.TestCase):
         self.assertIsNone(score['recall']['wake'])
         self.assertEqual(score['recall']['deep'], 1)
 
+    def test_permutation_diagnostics_preserve_inputs_and_are_repeatable(self):
+        class Model:
+            def predict(self, x): return np.asarray(x)[:, 0].astype(int)
+        nights = [{'rows': [{'x': [float(i % 4), 1.0], 'y': i % 4} for i in range(40)]}]
+        import copy
+        original = copy.deepcopy(nights)
+        rules = {'smoothIsolatedEpochs': False, 'transitions': []}
+        drops = m.permutation_drops(Model(), nights, rules, ['signal', 'constant'])
+        self.assertEqual(nights, original)
+        self.assertEqual(drops, m.permutation_drops(Model(), nights, rules, ['signal', 'constant']))
+        self.assertEqual(drops['constant'], [0.0, 0.0, 0.0])
+        self.assertTrue(all(v > 0 for v in drops['signal']))
+
     def test_exported_forest_preserves_class_identity_when_wake_is_absent(self):
         nights = [{'rows': [{'x': [float(i), float(i % 3)], 'y': 1 + i % 3} for i in range(60)]}]
         clf = m.fit('balanced_leaf5', nights)

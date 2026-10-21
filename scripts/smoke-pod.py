@@ -81,12 +81,19 @@ def main():
     assert events[-1]['status']=='complete'
     traces=json.loads((args.output/'model/timelines.json').read_text())
     assert traces['podSource']=='pod-api' and len(traces['sessions'])==5
-    assert all(r['heldOut'] is not None and r['final'] is not None and r['pod']==1 for n in traces['sessions'] for r in n['rows'])
+    assert all(r['heldOut'] is not None and r['baseline'] is not None and r['final'] is not None and r['pod']==1 for n in traces['sessions'] for r in n['rows'])
     confusion=[[0]*4 for _ in range(4)]
     for night in traces['sessions']:
         for row in night['rows']:
             if row['watch'] is not None: confusion[row['watch']][row['heldOut']]+=1
     assert confusion==report['scores']['nested']['confusion']
+    baseline=[[0]*4 for _ in range(4)]
+    for night in traces['sessions']:
+        for row in night['rows']:
+            if row['watch'] is not None: baseline[row['watch']][row['baseline']]+=1
+    assert baseline==report['scores']['existing_depth8']['confusion']
+    assert len(state['folds'])==5
+    assert report['featureImportance']['repeats']==3
     print('Synthetic HTTP pod → features → training → parity → report passed.')
 
 

@@ -13,6 +13,8 @@ def update(phase, detail, **fields):
         return
     path = Path(filename)
     state = json.loads(path.read_text()) if path.exists() else {'startedAt': time.time(), 'status': 'running'}
+    if fields.get('status') in ('failed', 'cancelled'):
+        state['stoppedFrom'] = state.get('phase')
     state.update(phase=phase, detail=detail, updatedAt=datetime.now(timezone.utc).isoformat(), **fields)
     state['elapsedSeconds'] = round(time.time() - state['startedAt'], 1)
     event = {'at': state['updatedAt'], 'elapsedSeconds': state['elapsedSeconds'], 'phase': phase, 'detail': detail, **fields}
@@ -22,6 +24,8 @@ def update(phase, detail, **fields):
     state['events'] = (state.get('events', []) + [{k: event[k] for k in ('at', 'elapsedSeconds', 'phase', 'detail')}])[-120:]
     if fields.get('fitResult'):
         state['fitHistory'] = (state.get('fitHistory', []) + [fields['fitResult']])[-80:]
+    if fields.get('foldResult'):
+        state['folds'] = state.get('folds', []) + [fields['foldResult']]
     if fields.get('heldOutResult'):
         state['heldOutHistory'] = state.get('heldOutHistory', []) + [fields['heldOutResult']]
     temp = path.with_suffix('.tmp')
