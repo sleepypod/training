@@ -102,9 +102,19 @@ def fetch(address, side, days, output, time_zone=None, fetch_watch=True, now=Non
     if not records:
         raise ValueError('No completed 3–14 hour sessions in the requested range')
     vitals, movement, refs = {}, {}, {}
+    pod_stages = {}
     for i, record in enumerate(records):
         a, b = millis(record['enteredBedAt']), millis(record['leftBedAt'])
         update('Fetching', f'Session {i + 1}/{len(records)}: vitals, movement' + (', Watch labels' if fetch_watch else ''), fetchedSessions=i, totalSessions=len(records))
+        trace = pod.get('biometrics/sleep-stages', side=side, sleepRecordId=record['id'])
+        if trace.get('sleepRecordId') != record['id'] or not isinstance(trace.get('epochs'), list):
+            raise ValueError('Pod stage trace does not match the requested sleep record')
+        if trace.get('stageView') is not None and trace['stageView'] != view:
+            raise ValueError('Pod stage configuration changed while fetching trace')
+        for epoch in trace['epochs']:
+            if epoch.get('stage') not in ('wake', 'light', 'deep', 'rem') or not isinstance(epoch.get('start'), (int, float)) or not isinstance(epoch.get('duration'), (int, float)) or epoch['duration'] <= 0:
+                raise ValueError('Invalid pod stage epoch')
+        pod_stages[str(record['id'])] = trace['epochs']
         targets = [('biometrics/vitals', 100000, vitals), ('biometrics/movement', 1000, movement)]
         if fetch_watch:
             targets.append(('biometrics/reference-stages', 20000, refs))
@@ -120,6 +130,7 @@ def fetch(address, side, days, output, time_zone=None, fetch_watch=True, now=Non
         raise ValueError('Stage configuration/calibration changed during fetch; retry')
     if fetch_watch and not refs:
         raise ValueError('No imported Watch labels on this pod; pass --watch-export or --watch-json')
+    (output / 'pod-stages.json').write_text(json.dumps({'source': 'pod-api', 'stageView': view, 'sessions': pod_stages}))
     snapshot = output / 'biometrics.db'
     with sqlite3.connect(snapshot) as db:
         db.executescript('''

@@ -3,7 +3,7 @@ type: "Training workflow"
 title: "Pod acquisition and visual progress"
 description: "Read-only LAN fetching, live progress, and local reports."
 status: "draft"
-generated: {"by": "codex/gpt-6", "at": "2026-10-21T05:58:40.712440+00:00"}
+generated: {"by": "codex/gpt-6", "at": "2026-10-21T06:17:04.078716+00:00"}
 sources: [{"resource": "sleepypod/training: scripts/fetch_pod.py, scripts/train.py, scripts/dashboard.py, scripts/progress.py"}, {"resource": "sleepypod/core: src/server/routers/biometrics.ts and src/biometrics/profiles/overview.ts; inspected API contract on 2026-10-20"}]
 ---
 
@@ -22,3 +22,9 @@ Validation includes synthetic API pagination and side-isolation tests, a full sy
 Detailed telemetry now includes response-body download bytes/rate, unique input row counts, descriptive feature statistics and class balance, per-fit rows before/after oversampling, measured fit times and rows/s, actual forest tree/node counts, inner-validation scores, and completed held-out night scores. These measurements do not alter training or selection. Fit timing is not a loss curve; held-out points correspond to different nights and remain incomplete until evaluation finishes. Feature matrix size is float64 storage, not process RAM.
 
 Every update is appended to ignored `events.jsonl`. The dashboard keeps a bounded recent history (120 events and 80 fits) and a scrolling log; `--verbose` retains terminal log lines instead of replacing the current status line. Saved reports embed the bounded telemetry so they remain useful offline.
+
+The sleep comparison now aligns three stage lanes (Pod, new model, Watch) on a shared time axis. Pod acquisition captures `GET /api/biometrics/sleep-stages` per session, checks record identity and available stage-view provenance, and retains `pod-stages.json`. Snapshot-only runs explicitly label the pod lane as a local rules replay. Aggregate Rules metrics remain a local replay and may differ from the captured API output.
+
+Private `model/timelines.json` preserves every feature epoch, including unlabeled context and prediction gaps. The nested-selected model predicts each held-out night without training on that night group; the final fitted model has a separate, explicitly in-sample view. Postprocessing matches scoring. The chart uses the pod StageTrace conventions: Wake / REM / Light / Deep ordering and no interpolation across gaps. Watch and captured pod stages are sampled at shared five-minute epoch midpoints, not displayed at their original finer boundaries.
+
+Session selection, exact epoch inspection, and disagreement highlights support visual comparison. Matched counts accompany per-night agreement percentages; missing/ambiguous labels are not filled in or scored as wake. Completed dashboards stop polling and unchanged payloads are not redrawn.

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from progress import update
+import timelines
 
 FIT_COUNT = 0
 
@@ -158,6 +159,8 @@ def main():
         objective='macro F1 across all four classes, then kappa', preprocessing='production TypeScript',
         prospective=False, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
+    traces = timelines.initial(data)
+    timelines.save(traces, args.out)
     outputs = {name: ([], []) for name in (*CANDIDATES, 'nested', 'rules', 'always_light')}
     update("Training", "Starting nested whole-night evaluation", completedFits=0, totalFits=len(groups) * 16 + 27, completedFolds=0, totalFolds=len(groups))
     folds = []
@@ -169,11 +172,14 @@ def main():
         fold = dict(group=group, trainingGroups=sorted({n['group'] for n in train}), selected=winner, innerScores=inner, scores={})
         update('Training', f'Outer evaluation: {winner} selected without held-out labels', evaluationStage='held-out evaluation')
         for name in CANDIDATES:
-            y, p = predict(fit(name, train), held, ruleset)
+            fitted = fit(name, train)
+            y, p = predict(fitted, held, ruleset)
             outputs[name][0].extend(y)
             outputs[name][1].extend(p)
             fold['scores'][name] = metrics(y, p)
             if name == winner:
+                timelines.add_predictions(traces, held, fitted, name, 'heldOut', ruleset, postprocess)
+                timelines.save(traces, args.out)
                 outputs['nested'][0].extend(y)
                 outputs['nested'][1].extend(p)
         labeled = [r for n in held for r in n['rows'] if r['y'] is not None]
@@ -206,6 +212,8 @@ def main():
     final_name, final_inner = inner_choice(nights, ruleset)
     update('Training', f'Final fit: {final_name}', evaluationStage='final fit')
     clf = fit(final_name, nights)
+    timelines.add_predictions(traces, nights, clf, final_name, 'final', ruleset, postprocess)
+    timelines.save(traces, args.out)
     update('Export', 'Verifying portable export against sklearn')
     artifact = export(clf, final_name, data, args.out, scores['nested'])
     report = dict(protocol=protocol, groups=len(groups), sessions=len(nights),

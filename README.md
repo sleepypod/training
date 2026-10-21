@@ -50,7 +50,11 @@ not a loss/learning curve, and partial results are not a final quality estimate.
 Dashboard history is bounded (120 events, 80 fit timings); `events.jsonl` retains
 all events. Feature summaries are descriptive only and do not affect fitting.
  `--dashboard` prints a loopback URL for a live browser view with progress,
-model comparisons, selectable metrics, and confusion matrices. It stays open after
+model comparisons, selectable metrics, and confusion matrices. The sleep comparison
+at the top aligns Pod / New model / Apple Watch stages by session. Select a night,
+hover an interval, or use Previous/Next to inspect exact stages. Orange marks
+Pod/model disagreements. Held-out predictions appear as each night finishes;
+the final fitted-model view is explicitly in-sample. It stays open after
 training until Ctrl-C. Without this flag the command exits when training finishes.
 Both modes save `index.html` in the run directory; open it directly for an offline
 interactive report. A failed or interrupted run retains its status and partial
@@ -61,6 +65,11 @@ completed sessions, splits saturated API windows, checks side identity, detects
 configuration/calibration changes, and retains response hashes in
 `acquisition.json`. Concurrent historical backfills can still alter data between
 reads. Use a consistent SQLite backup when atomic input consistency is required.
+Timeline Pod stages come from `GET /api/biometrics/sleep-stages` for each record,
+with record identity and stage-view consistency checked. The five-minute comparison
+samples pod/Watch stages at epoch midpoints; it does not display their original
+sub-epoch boundaries. Snapshot-only runs label the pod lane as a local rules replay.
+Aggregate “Rules (replay)” metrics still use the pinned local rules engine.
 The current rules are applied retrospectively; they do not reconstruct historical
 per-sample rule versions. Raw responses and reports remain under ignored `data/`.
 
@@ -103,6 +112,8 @@ or activates the model. It produces:
 - `progress.json`, the full `events.jsonl` log, and an offline interactive `index.html` report. Pod acquisition
   also creates `biometrics.db`, `responses/`, and `acquisition.json`.
 - `model/report.json` and `model/protocol.json` with evaluation and provenance.
+- Private `model/timelines.json` with aligned Watch, captured pod, held-out, and
+  final-model predictions. Pod acquisition also saves `pod-stages.json`.
 - `model/candidate.json` (pod-compatible model), `model/candidate.joblib` (Python fit),
   and `model/parity-inputs.json` (private verification rows).
 

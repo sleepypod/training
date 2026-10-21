@@ -59,6 +59,7 @@ class FetchTests(unittest.TestCase):
             if path.endswith('sleep-records'): return [
                 {'id': 1, 'side': 'left', 'enteredBedAt': iso(start), 'leftBedAt': iso(start + 10800000)},
                 {'id': 2, 'side': 'left', 'enteredBedAt': iso(start), 'leftBedAt': None}]
+            if path.endswith('sleep-stages'): return {'sleepRecordId': 1, 'epochs': [{'start': start, 'duration': 300000, 'stage': 'light'}], 'stageView': view}
             if path.endswith('vitals'): return [{'id': 3, 'side': 'left', 'timestamp': iso(start), 'heartRate': 60, 'hrv': 25, 'breathingRate': 14}]
             if path.endswith('movement'): return [{'id': 4, 'side': 'left', 'timestamp': iso(start), 'totalMovement': 2}]
             if path.endswith('reference-stages'): return [{'id': 5, 'side': 'left', 'source': 'apple_watch', 'start': iso(start), 'end': iso(start + 300000), 'stage': 'light'}]
@@ -72,6 +73,12 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(tz, 'UTC')
             self.assertEqual(json.loads(watch.read_text())['stages'][0][2], 'light')
             self.assertIn('not an atomic', json.loads((Path(d) / 'acquisition.json').read_text())['consistency'])
+        with tempfile.TemporaryDirectory() as d:
+            def wrong_record(path, **q):
+                if path.endswith('sleep-stages'): return {'sleepRecordId': 999, 'epochs': []}
+                return get(path, **q)
+            with patch.object(Pod, 'get', side_effect=wrong_record), self.assertRaisesRegex(ValueError, 'requested sleep record'):
+                fetch('pod', 'left', 30, Path(d), now=now)
         with tempfile.TemporaryDirectory() as d:
             calls = 0
             def changed(path, **q):

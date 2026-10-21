@@ -22,6 +22,8 @@ const config = db.prepare('select payload from biometric_runtime_configs where s
 const ruleset = config ? JSON.parse(config.payload).resolved.sleep_stages.ruleset : DEFAULT_STAGE_RULESET
 const quality = (db.prepare('select quality_score q from calibration_profiles where side=? and sensor_type=\'piezo\' limit 1').get(side) as { q: number } | undefined)?.q ?? 0
 const records = db.prepare('select id, entered_bed_at s, left_bed_at e from sleep_records where side=? and left_bed_at-entered_bed_at between 10800 and 50400 order by entered_bed_at').all(side) as { id: number, s: number, e: number }[]
+const podPath = join(dirname(snapshot), 'pod-stages.json')
+const podStages = existsSync(podPath) ? JSON.parse(readFileSync(podPath, 'utf8')) as { sessions: Record<string, { start: number, duration: number, stage: string }[]> } : null
 const nights = []
 for (const record of records) {
   const labelsAt = (seconds: number) => [...new Set(reference.filter(([a, b]) => a <= seconds * 1000 && seconds * 1000 < b).map(r => stages.indexOf(r[2])))]
@@ -37,7 +39,8 @@ for (const record of records) {
     const mid = epoch.start + 150
     const reference = labelsAt(mid)
     const rule = rules.find(r => r.start <= mid * 1000 && mid * 1000 < r.start + r.duration)
-    return { start: epoch.start, x: POD_NATIVE_CONTRACT.map(c => epoch.values[c]), y: reference.length === 1 ? reference[0] : null, rule: rule ? stages.indexOf(rule.stage) : null }
+    const podLabels = [...new Set((podStages?.sessions[String(record.id)] ?? []).filter(r => r.start <= mid * 1000 && mid * 1000 < r.start + r.duration).map(r => stages.indexOf(r.stage)))]
+    return { pod: podLabels.length === 1 && podLabels[0] >= 0 ? podLabels[0] : null, start: epoch.start, x: POD_NATIVE_CONTRACT.map(c => epoch.values[c]), y: reference.length === 1 ? reference[0] : null, rule: rule ? stages.indexOf(rule.stage) : null }
   })
   if (rows.filter(r => r.y !== null).length < 24) continue
   // Noon-to-noon grouping keeps fragmented sessions of one local night together.
@@ -46,6 +49,6 @@ for (const record of records) {
 }
 const hash = (path: string | URL) => createHash('sha256').update(readFileSync(path)).digest('hex')
 mkdirSync(dirname(output), { recursive: true })
-writeFileSync(output, JSON.stringify({ version: 1, side, timeZone, features: POD_NATIVE_CONTRACT, ruleset, sources: { ...(existsSync(join(dirname(snapshot), 'acquisition.json')) ? { acquisition: hash(join(dirname(snapshot), 'acquisition.json')) } : {}), coreCommit: JSON.parse(readFileSync(new URL('../vendor/core-source.json', import.meta.url), 'utf8')).commit, vendorManifest: hash(new URL('../vendor/core-source.json', import.meta.url)), snapshot: hash(snapshot), watch: hash(watchPath), featureCode: hash(new URL('../vendor/core/src/lib/personal-stage-model.ts', import.meta.url)) }, nights }), { flag: 'wx' })
+writeFileSync(output, JSON.stringify({ version: 1, side, timeZone, podStageSource: podStages ? 'pod-api' : 'replayed-rules', features: POD_NATIVE_CONTRACT, ruleset, sources: { ...(podStages ? { podStages: hash(podPath) } : {}), ...(existsSync(join(dirname(snapshot), 'acquisition.json')) ? { acquisition: hash(join(dirname(snapshot), 'acquisition.json')) } : {}), coreCommit: JSON.parse(readFileSync(new URL('../vendor/core-source.json', import.meta.url), 'utf8')).commit, vendorManifest: hash(new URL('../vendor/core-source.json', import.meta.url)), snapshot: hash(snapshot), watch: hash(watchPath), featureCode: hash(new URL('../vendor/core/src/lib/personal-stage-model.ts', import.meta.url)) }, nights }), { flag: 'wx' })
 db.close()
 console.log(`${nights.length} sessions, ${new Set(nights.map(n => n.group)).size} night groups, ${nights.reduce((s, n) => s + n.rows.filter(r => r.y !== null).length, 0)} labeled epochs`)

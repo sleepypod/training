@@ -44,6 +44,10 @@ def main():
             name = url.path.rsplit('/',1)[-1]
             if name == 'settings': result = {'device': {'timezone': 'UTC'}}
             elif name == 'overview': result = overview
+            elif name == 'sleep-stages':
+                record=next(r for r in datasets['sleep-records'] if r['id']==int(q['sleepRecordId']))
+                a,b=millis(record['enteredBedAt']),millis(record['leftBedAt'])
+                result={'sleepRecordId':record['id'],'stageView':overview['stageView'],'epochs':[{'start':t,'duration':300000,'stage':'light'} for t in range(a,b,300000)]}
             elif name in datasets:
                 a,b = millis(q['startDate']),millis(q['endDate'])
                 def included(r):
@@ -75,6 +79,14 @@ def main():
     events=[json.loads(line) for line in (args.output/'events.jsonl').read_text().splitlines()]
     assert len([e for e in events if 'fitResult' in e])==state['completedFits']
     assert events[-1]['status']=='complete'
+    traces=json.loads((args.output/'model/timelines.json').read_text())
+    assert traces['podSource']=='pod-api' and len(traces['sessions'])==5
+    assert all(r['heldOut'] is not None and r['final'] is not None and r['pod']==1 for n in traces['sessions'] for r in n['rows'])
+    confusion=[[0]*4 for _ in range(4)]
+    for night in traces['sessions']:
+        for row in night['rows']:
+            if row['watch'] is not None: confusion[row['watch']][row['heldOut']]+=1
+    assert confusion==report['scores']['nested']['confusion']
     print('Synthetic HTTP pod → features → training → parity → report passed.')
 
 
