@@ -24,7 +24,7 @@ Transfer closed chunks Watch → iPhone → local pod/training storage, with dur
 
 Prefer an opt-in iPhone bedside capture prototype. Use the recording audio-session category, microphone permission and background audio capability; handle calls, route changes, alarms, interruptions, low storage and process termination. Verify overnight behavior and battery use on hardware. Do not start the microphone merely because motion capture is enabled.
 
-Default to on-device processing and retained event metadata, not retained room audio. Optional research clips require a separate explicit setting explaining that other people and speech may be captured. Provide visible recording state, stop and delete controls. No cloud upload is needed.
+Process audio on-device in temporary memory buffers and retain only event metadata and capture coverage. Never write or upload raw audio, transcripts or audio embeddings. There is no research-clip retention option in this implementation. Retraining the audio classifier requires a separate, consented labeled-audio dataset. Provide visible recording state, stop and delete controls. No cloud upload is needed.
 
 Audio capture metadata: sample rate, channel count, encoding, route, sample-frame time origin, valid-frame intervals, clipping/noise flags. Event rows: captureId, startMs, endMs, eventType, confidence, detectorVersion, and labelOrigin (predicted or human-reviewed). Confidence is not a validated probability unless calibrated. Events spanning training windows contribute only their overlapping duration. Export observed audio coverage alongside candidate-snore duration/count; distinguish no detection from no recording.
 
@@ -49,3 +49,5 @@ Keep pod-only models deployable without Watch or microphone inputs. Extra sensor
 - [Apple accelerometer recording](https://developer.apple.com/documentation/coremotion/cmsensorrecorder/recordaccelerometer(forduration:))
 - [Apple recording audio category](https://developer.apple.com/documentation/avfaudio/avaudiosession/category-swift.struct/record)
 - [Apple extended runtime sessions](https://developer.apple.com/documentation/watchkit/using-extended-runtime-sessions)
+
+Implementation sequence and acceptance checks: [implementation plan](overnight-capture-implementation-plan.md).
