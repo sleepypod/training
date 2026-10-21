@@ -66,6 +66,15 @@ def main():
     assert report['groups']==5 and report['artifact']['parityRows']==180
     assert (args.output/'index.html').exists() and (args.output/'acquisition.json').exists()
     assert any('reference-stages' in r for r in requests)
+    acquisition=json.loads((args.output/'acquisition.json').read_text())
+    assert state['transfer']['requests']==len(acquisition['requests'])
+    assert state['transfer']['bytes']==sum((args.output/'responses'/r['file']).stat().st_size for r in acquisition['requests'])
+    assert state['dataCounts']['vitals']==900 and state['dataCounts']['movement']==900
+    assert state['dataset']['rows']==180 and state['dataset']['labeled']==180
+    assert len(state['heldOutHistory'])==5 and len(state['fitHistory'])==80
+    events=[json.loads(line) for line in (args.output/'events.jsonl').read_text().splitlines()]
+    assert len([e for e in events if 'fitResult' in e])==state['completedFits']
+    assert events[-1]['status']=='complete'
     print('Synthetic HTTP pod → features → training → parity → report passed.')
 
 

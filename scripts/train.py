@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from dashboard import serve, write_report
 from fetch_pod import fetch
 from progress import update
+from telemetry import summarize_features
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,6 +32,7 @@ def main():
     ap.add_argument('--source', default='Watch')
     ap.add_argument('--side', choices=['left', 'right'], required=True)
     ap.add_argument('--timezone', help='IANA timezone; default from pod, required with --snapshot')
+    ap.add_argument('--verbose', action='store_true', help='Keep every progress event as a terminal log line')
     ap.add_argument('--dashboard', action='store_true', help='Serve a live loopback dashboard; stays open until Ctrl-C')
     ap.add_argument('--out', type=Path, default=ROOT / 'data/runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     args = ap.parse_args()
@@ -44,6 +46,7 @@ def main():
     run(sys.executable, str(ROOT / 'scripts/check-vendor.py'))
     output.mkdir(parents=True, exist_ok=False)
     os.environ['TRAINING_PROGRESS'] = str(output / 'progress.json')
+    if args.verbose: os.environ['TRAINING_VERBOSE'] = '1'
     update('Preparing', 'Starting local training pipeline')
     write_report(output)
     server = serve(output) if args.dashboard else None
@@ -60,7 +63,9 @@ def main():
             watch = parsed
         update('Features', 'Extracting production features and matching labels')
         features = output / 'features.json'
+        extraction_started = time.perf_counter()
         run(tsx, str(ROOT / 'scripts/export-runtime-features.ts'), str(snapshot), str(watch), str(features), args.side, args.timezone)
+        summarize_features(features, time.perf_counter() - extraction_started)
         model = output / 'model'
         run(sys.executable, str(ROOT / 'scripts/retrain-models.py'), str(features), '--out', str(model))
         update('Parity', 'Checking every exported prediction in TypeScript')

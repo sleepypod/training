@@ -5,6 +5,7 @@ import ipaddress
 import json
 from pathlib import Path
 import sqlite3
+import time
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
@@ -44,13 +45,20 @@ class Pod:
         self.output = Path(output)
         self.output.mkdir(parents=True, exist_ok=False)
         self.requests = []
+        self.started = time.perf_counter()
+        self.bytes = 0
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def get(self, path, **params):
         url = self.base + '/api/' + path + ('?' + urllib.parse.urlencode(params) if params else '')
         with self.opener.open(url, timeout=30) as response:
             raw = response.read()
+        self.bytes += len(raw)
+        elapsed = time.perf_counter() - self.started
         data = json.loads(raw)
+        count = len(data) if isinstance(data, list) else None
+        update('Fetching', f'GET {path}: {len(raw):,} bytes' + (f' · {count:,} rows returned' if count is not None else ''),
+               transfer={'requests': len(self.requests) + 1, 'bytes': self.bytes, 'bytesPerSecond': round(self.bytes / max(elapsed, 1e-9)), 'seconds': round(elapsed, 2)})
         name = f'{len(self.requests):05d}.json'
         (self.output / name).write_bytes(raw)
         self.requests.append({'path': path, 'params': params, 'file': name, 'sha256': hashlib.sha256(raw).hexdigest(), 'fetchedAt': iso(datetime.now(timezone.utc).timestamp() * 1000)})
@@ -105,6 +113,7 @@ def fetch(address, side, days, output, time_zone=None, fetch_watch=True, now=Non
                 if row['id'] in dest and dest[row['id']] != row:
                     raise ValueError(f'{path} changed during acquisition')
                 dest[row['id']] = row
+        update('Fetching', f'Session {i + 1}/{len(records)} received · {len(vitals):,} unique vitals · {len(movement):,} movement rows', fetchedSessions=i + 1, dataCounts={'sessions': i + 1, 'vitals': len(vitals), 'movement': len(movement), 'referenceStages': len(refs)})
     after = pod.get('biometric-tuning/profiles/overview', side=side)
     after_quality = next((r.get('qualityScore') or 0 for r in after['sensorCalibration'] if r['sensorType'] == 'piezo'), 0)
     if after['stageView'] != view or after_quality != quality:

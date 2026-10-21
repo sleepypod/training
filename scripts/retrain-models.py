@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,8 +37,8 @@ CANDIDATES = ('existing_depth8', 'balanced_leaf5', 'balanced_leaf10', 'balanced_
 
 def fit(name, nights):
     global FIT_COUNT
-    update("Training", f"Fitting {name}", completedFits=FIT_COUNT)
     rows = [(r['x'], r['y']) for n in nights for r in n['rows'] if r['y'] is not None]
+    original_rows = len(rows)
     if name == 'existing_depth8':
         rows = pm.oversample(rows)
     x = np.asarray([r[0] for r in rows])
@@ -48,9 +49,17 @@ def fit(name, nights):
         clf = RandomForestClassifier(n_estimators=200, max_depth=6 if name == 'balanced_leaf10' else 8,
             min_samples_leaf={'balanced_leaf5': 5, 'balanced_leaf10': 10}.get(name, 1),
             class_weight=None if name == 'existing_depth8' else 'balanced_subsample', random_state=42, n_jobs=1)
+    update('Training', f'Fitting {name}: {len(x):,} rows × {x.shape[1]} features ({original_rows:,} before resampling)',
+           completedFits=FIT_COUNT, currentFit={'model': name, 'originalRows': original_rows, 'rows': len(x), 'features': x.shape[1], 'matrixBytes': x.nbytes})
+    started = time.perf_counter()
     fitted = clf.fit(x, y)
+    seconds = time.perf_counter() - started
     FIT_COUNT += 1
-    update("Training", f"Finished {name}", completedFits=FIT_COUNT)
+    trees = len(getattr(clf, 'estimators_', []))
+    result = {'fit': FIT_COUNT, 'model': name, 'seconds': round(seconds, 4), 'rows': len(x), 'originalRows': original_rows,
+              'rowsPerSecond': round(len(x) / max(seconds, 1e-9), 1), 'trees': trees,
+              'nodes': sum(t.tree_.node_count for t in getattr(clf, 'estimators_', []))}
+    update('Training', f'{name}: {seconds:.3f}s · {result["rowsPerSecond"]:,.0f} rows/s · {trees} trees · {result["nodes"]:,} nodes', completedFits=FIT_COUNT, fitResult=result)
     return fitted
 
 
@@ -102,6 +111,8 @@ def inner_choice(nights, ruleset):
             truth.extend(y)
             preds.extend(p)
         scores[name] = metrics(truth, preds)
+        kappa_text = 'n/a' if scores[name]['kappa'] is None else f"{scores[name]['kappa']:.3f}"
+        update('Training', f'Inner validation {name}: macro F1 {scores[name]["macroF1"]:.3f} · κ {kappa_text}', innerResult={'model': name, **scores[name]})
     # Fixed priority: equal-weight four-class F1, then kappa. No held-out labels.
     winner = max(CANDIDATES, key=lambda k: (scores[k]['macroF1'], scores[k]['kappa'] or 0))
     return winner, scores
@@ -151,10 +162,12 @@ def main():
     update("Training", "Starting nested whole-night evaluation", completedFits=0, totalFits=len(groups) * 16 + 27, completedFolds=0, totalFolds=len(groups))
     folds = []
     for group in groups:
+        update('Training', f'Outer night {len(folds) + 1}/{len(groups)}: selecting on training nights only', evaluationStage='nested selection', outerFold=len(folds) + 1)
         train = [n for n in nights if n['group'] != group]
         held = [n for n in nights if n['group'] == group]
         winner, inner = inner_choice(train, ruleset)
         fold = dict(group=group, trainingGroups=sorted({n['group'] for n in train}), selected=winner, innerScores=inner, scores={})
+        update('Training', f'Outer evaluation: {winner} selected without held-out labels', evaluationStage='held-out evaluation')
         for name in CANDIDATES:
             y, p = predict(fit(name, train), held, ruleset)
             outputs[name][0].extend(y)
@@ -171,12 +184,13 @@ def main():
         outputs['rules'][0].extend(r['y'] for r in rule_rows)
         outputs['rules'][1].extend(r['rule'] for r in rule_rows)
         folds.append(fold)
-        update("Training", f"Held-out night {len(folds)}/{len(groups)} complete: {winner}", completedFolds=len(folds))
+        update("Training", f"Held-out night {len(folds)}/{len(groups)} complete: {winner} · macro F1 {fold['scores'][winner]['macroF1']:.3f}", completedFolds=len(folds), heldOutResult={'fold': len(folds), 'selected': winner, 'macroF1': fold['scores'][winner]['macroF1'], 'kappa': fold['scores'][winner]['kappa'], 'epochs': fold['scores'][winner]['epochs'], 'baselineMacroF1': fold['scores']['existing_depth8']['macroF1']})
     scores = {name: metrics(y, p) for name, (y, p) in outputs.items()}
     # A chronological audit, also retrospective: last two groups were already
     # inspected in earlier work and are not advertised as untouched holdouts.
     early = [n for n in nights if n['group'] not in groups[-2:]]
     recent = [n for n in nights if n['group'] in groups[-2:]]
+    update('Training', 'Selecting chronological audit model', evaluationStage='chronological audit')
     temporal_name, _ = inner_choice(early, ruleset)
     update('Training', 'Chronological audit', totalFits=len(groups) * 16 + 25 + len(set([temporal_name, 'existing_depth8'])))
     temporal = {'selected': temporal_name, 'groups': groups[-2:], 'scores': {}}
@@ -188,7 +202,9 @@ def main():
     uncertainty = {'meanNightMacroF1Difference': float(differences.mean()),
         'nightBootstrap95Percent': np.quantile(means, [.025, .975]).tolist(),
         'note': 'Descriptive only: overlapping CV training sets make this approximate.'}
+    update('Training', 'Selecting final candidate on all groups', evaluationStage='final selection')
     final_name, final_inner = inner_choice(nights, ruleset)
+    update('Training', f'Final fit: {final_name}', evaluationStage='final fit')
     clf = fit(final_name, nights)
     update('Export', 'Verifying portable export against sklearn')
     artifact = export(clf, final_name, data, args.out, scores['nested'])

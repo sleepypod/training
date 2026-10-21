@@ -21,7 +21,7 @@ no sibling core checkout or unpublished commit is needed to run training.
 ## Query the pod and watch training
 
 ```sh
-uv run --locked python scripts/train.py --pod 192.168.1.88 --side left --dashboard
+uv run --locked python scripts/train.py --pod 192.168.1.88 --side left --dashboard --verbose
 ```
 
 Replace the example IP with your pod. The fetcher uses unauthenticated, read-only
@@ -35,7 +35,21 @@ If Watch labels are not already imported on the pod, add
 not import labels, modify settings, or activate a model.
 
 Terminal progress shows each phase, completed night folds, model fits, and elapsed
-time. `--dashboard` prints a loopback URL for a live browser view with progress,
+time. `--verbose` keeps every event on its own terminal line. All runs also save
+`events.jsonl` with the complete structured history. The dashboard shows:
+
+- Response-body bytes, average download throughput, API calls, and unique input rows.
+- Labeled/unlabeled feature epochs, class balance, and per-feature min/mean/max/std.
+- Per-fit input rows (before/after oversampling), fit time, rows/s, and actual tree/node counts.
+- A fit-time chart and per-night held-out macro F1 for nested selection versus the baseline.
+- A scrolling activity feed with inner-validation scores and current evaluation phase.
+
+Throughput measures wall-clock work for this run, not sensor cadence. Feature
+matrix bytes describe float64 storage, not process memory. Per-night scores are
+not a loss/learning curve, and partial results are not a final quality estimate.
+Dashboard history is bounded (120 events, 80 fit timings); `events.jsonl` retains
+all events. Feature summaries are descriptive only and do not affect fitting.
+ `--dashboard` prints a loopback URL for a live browser view with progress,
 model comparisons, selectable metrics, and confusion matrices. It stays open after
 training until Ctrl-C. Without this flag the command exits when training finishes.
 Both modes save `index.html` in the run directory; open it directly for an offline
@@ -86,7 +100,7 @@ checks all exported predictions against the TypeScript evaluator. It never uploa
 or activates the model. It produces:
 
 - `watch.json` when parsing an export or fetching pod labels, plus `features.json`.
-- `progress.json` and an offline interactive `index.html` report. Pod acquisition
+- `progress.json`, the full `events.jsonl` log, and an offline interactive `index.html` report. Pod acquisition
   also creates `biometrics.db`, `responses/`, and `acquisition.json`.
 - `model/report.json` and `model/protocol.json` with evaluation and provenance.
 - `model/candidate.json` (pod-compatible model), `model/candidate.joblib` (Python fit),
