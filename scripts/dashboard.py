@@ -1,5 +1,6 @@
 """Local training workspace, persistent run history, and self-contained offline reports."""
 import argparse
+import base64
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -48,7 +49,7 @@ def payload(output, key=None):
 
 def html(data):
     embedded = json.dumps(data, allow_nan=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
-    return (UI / 'dashboard.html').read_text().replace('__CSS__', (UI / 'dashboard.css').read_text()).replace('__JS__', (UI / 'dashboard.js').read_text()).replace('__EMBEDDED__', embedded)
+    return (UI / 'dashboard.html').read_text().replace('__CSS__', (UI / 'dashboard.css').read_text()).replace('__JS__', (UI / 'dashboard.js').read_text()).replace('__LOGO__', 'data:image/png;base64,' + base64.b64encode((UI / 'sleepypod-logo.png').read_bytes()).decode('ascii')).replace('__EMBEDDED__', embedded)
 
 
 def write_report(output):

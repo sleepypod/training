@@ -1,0 +1,18 @@
+{
+  "capturedAt": "2026-10-21",
+  "sourceBaseRevision": "b3348189a07711dba26f11cda5a6c636531d1249",
+  "changes": "Official docs-site logo applied before capture",
+  "method": "Unmodified Chrome viewport screenshots through cua_repl; 1440x1000 viewport",
+  "data": "scripts/make-synthetic-inputs.py via snapshot training; isolated synthetic-only catalog",
+  "images": [
+    {
+      "file": "training-overview.jpg",
+      "sha256": "0b60e44bca86ee7ee420ca0b4675afc5c9bfcb25e716bc312699d3556b679123"
+    },
+    {
+      "file": "training-nights.jpg",
+      "sha256": "253c642669e0d6360c96f958d5f2d0812693bcecb9e5ebc0c89201fc253854db"
+    }
+  ],
+  "logoSource": "https://sleepypod.github.io/media/sleepypod-logo.png"
+}

@@ -137,8 +137,10 @@ table,
   font-size: 11px;
 }
 .brand-mark {
-  color: var(--accent);
-  font-size: 25px;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 .section-label {
   font-size: 10px;

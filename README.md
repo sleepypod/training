@@ -4,6 +4,19 @@
 [OKF knowledge base](knowledge/index.md). Hosted privately at
 [sleepypod/training](https://github.com/sleepypod/training).
 
+## Training workspace
+
+Watch training progress, compare held-out models with the pod rules and Watch
+labels, and reopen previous runs. See the [sleepypod documentation](https://sleepypod.github.io/developers/training/)
+for the workflow and how it relates to personal models on the pod.
+
+![Training overview with run history, pipeline status, and held-out scores](docs/images/training-overview.jpg)
+
+![Sleep-stage comparison showing Pod, candidate, baseline, and Watch timelines](docs/images/training-nights.jpg)
+
+These are unmodified captures of the running app with deterministic synthetic
+test data. The displayed scores illustrate the interface, not real-world accuracy.
+
 ## Setup
 
 Install Node.js 24 and `uv`, then from this repository:
@@ -192,6 +205,15 @@ npm run features -- data/biometrics.db data/watch.json data/features.json left A
 uv run --locked python scripts/retrain-models.py data/features.json --out data/runs/manual-model
 npm run parity -- data/runs/manual-model
 ```
+
+## Save and reuse a model
+
+Every successful run automatically saves `model/candidate.json` (portable pod
+model) and `model/candidate.joblib` (fitted Python model) inside its run folder.
+The **Log** tab also offers **Download candidate JSON**. Keep the complete run
+folder to retain evaluation results, feature contracts, provenance, and parity
+checks. These local artifacts are Git-ignored; back them up separately.
+Saving or downloading a candidate does not activate it on the pod.
 
 ## Validate without personal data
 
