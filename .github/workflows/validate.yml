@@ -24,3 +24,6 @@ jobs:
           --snapshot data/smoke-inputs/biometrics.db
           --watch-export data/smoke-inputs/export.zip
           --side left --timezone UTC --out data/smoke-run
+      - run: >-
+          uv run --locked python scripts/smoke-pod.py
+          data/smoke-inputs data/smoke-run/features.json data/pod-smoke-run

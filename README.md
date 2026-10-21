@@ -18,6 +18,38 @@ pins Python 3.11 numerical dependencies. Production features, rules, and portabl
 inference are [vendored from a pinned core revision](vendor/README.md), with checksums;
 no sibling core checkout or unpublished commit is needed to run training.
 
+## Query the pod and watch training
+
+```sh
+uv run --locked python scripts/train.py --pod 192.168.1.88 --side left --dashboard
+```
+
+Replace the example IP with your pod. The fetcher uses unauthenticated, read-only
+HTTP on port 3000; `--pod hostname:port` also works. It reads the pod timezone,
+completed sessions from the last 30 days, vitals, movement, imported Watch labels,
+and the current stage rules. Use `--days 14` to change the window or `--timezone`
+to explicitly override the pod setting. No MCP client or SSH is needed.
+
+If Watch labels are not already imported on the pod, add
+`--watch-export data/export.zip` or `--watch-json data/watch.json`. Fetching does
+not import labels, modify settings, or activate a model.
+
+Terminal progress shows each phase, completed night folds, model fits, and elapsed
+time. `--dashboard` prints a loopback URL for a live browser view with progress,
+model comparisons, selectable metrics, and confusion matrices. It stays open after
+training until Ctrl-C. Without this flag the command exits when training finishes.
+Both modes save `index.html` in the run directory; open it directly for an offline
+interactive report. A failed or interrupted run retains its status and partial
+files; retry into a new directory.
+
+API reads are not an atomic database snapshot. The fetcher limits acquisition to
+completed sessions, splits saturated API windows, checks side identity, detects
+configuration/calibration changes, and retains response hashes in
+`acquisition.json`. Concurrent historical backfills can still alter data between
+reads. Use a consistent SQLite backup when atomic input consistency is required.
+The current rules are applied retrospectively; they do not reconstruct historical
+per-sample rule versions. Raw responses and reports remain under ignored `data/`.
+
 ## Train with your data
 
 Put local inputs in `data/`. Only `data/.gitkeep` is tracked; all other contents,
@@ -53,7 +85,9 @@ features, performs nested whole-night model selection, writes the candidate, and
 checks all exported predictions against the TypeScript evaluator. It never uploads
 or activates the model. It produces:
 
-- `watch.json` when parsing an export, plus `features.json`.
+- `watch.json` when parsing an export or fetching pod labels, plus `features.json`.
+- `progress.json` and an offline interactive `index.html` report. Pod acquisition
+  also creates `biometrics.db`, `responses/`, and `acquisition.json`.
 - `model/report.json` and `model/protocol.json` with evaluation and provenance.
 - `model/candidate.json` (pod-compatible model), `model/candidate.joblib` (Python fit),
   and `model/parity-inputs.json` (private verification rows).
@@ -83,6 +117,12 @@ uv run --locked python scripts/make-synthetic-inputs.py data/smoke-inputs
 uv run --locked python scripts/train.py \
   --snapshot data/smoke-inputs/biometrics.db --watch-export data/smoke-inputs/export.zip \
   --side left --timezone UTC --out data/smoke-run
+```
+
+To also exercise pod fetching against a synthetic local HTTP server:
+
+```sh
+uv run --locked python scripts/smoke-pod.py data/smoke-inputs data/smoke-run/features.json data/pod-smoke-run
 ```
 
 Synthetic fixtures are invented and deterministic. Use fresh directories to repeat

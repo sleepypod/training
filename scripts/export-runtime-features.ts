@@ -4,9 +4,9 @@
  */
 import Database from 'better-sqlite3'
 import { z } from 'zod'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { filterModelOutliers, stageModelFeatures, POD_NATIVE_CONTRACT } from '../vendor/core/src/lib/personal-stage-model'
 import { DEFAULT_STAGE_RULESET } from '../vendor/core/src/lib/sleep-stage-rules'
 import { runStageClassifier } from '../vendor/core/src/lib/sleep-stages'
@@ -46,6 +46,6 @@ for (const record of records) {
 }
 const hash = (path: string | URL) => createHash('sha256').update(readFileSync(path)).digest('hex')
 mkdirSync(dirname(output), { recursive: true })
-writeFileSync(output, JSON.stringify({ version: 1, side, timeZone, features: POD_NATIVE_CONTRACT, ruleset, sources: { coreCommit: JSON.parse(readFileSync(new URL('../vendor/core-source.json', import.meta.url), 'utf8')).commit, vendorManifest: hash(new URL('../vendor/core-source.json', import.meta.url)), snapshot: hash(snapshot), watch: hash(watchPath), featureCode: hash(new URL('../vendor/core/src/lib/personal-stage-model.ts', import.meta.url)) }, nights }), { flag: 'wx' })
+writeFileSync(output, JSON.stringify({ version: 1, side, timeZone, features: POD_NATIVE_CONTRACT, ruleset, sources: { ...(existsSync(join(dirname(snapshot), 'acquisition.json')) ? { acquisition: hash(join(dirname(snapshot), 'acquisition.json')) } : {}), coreCommit: JSON.parse(readFileSync(new URL('../vendor/core-source.json', import.meta.url), 'utf8')).commit, vendorManifest: hash(new URL('../vendor/core-source.json', import.meta.url)), snapshot: hash(snapshot), watch: hash(watchPath), featureCode: hash(new URL('../vendor/core/src/lib/personal-stage-model.ts', import.meta.url)) }, nights }), { flag: 'wx' })
 db.close()
 console.log(`${nights.length} sessions, ${new Set(nights.map(n => n.group)).size} night groups, ${nights.reduce((s, n) => s + n.rows.filter(r => r.y !== null).length, 0)} labeled epochs`)

@@ -4,6 +4,20 @@ Keep inputs and outputs under `data/`, whose contents are ignored except for the
 tracked `.gitkeep` placeholder. A clone creates the directory but includes no
 personal exports, databases, per-epoch rows, or fitted models.
 
+## Read directly from the pod
+
+`train.py --pod <ip> --side left` acquires the dataset through GET requests on the
+LAN API, without credentials. The default window is 30 days, bounded at fetch
+start. Only completed 3–14 hour sessions are included; active sessions are skipped.
+The pod must have imported Watch reference stages unless you provide a local
+Watch export. All responses, request parameters, hashes, and current stage-view
+provenance are retained in the ignored run directory.
+
+The local `biometrics.db` is a minimal materialization for the training exporter,
+not a full backup of the pod database. It contains the selected sessions, vitals,
+movement, and captured rule/calibration settings. Multi-request acquisition is not
+atomic; changes to old records during acquisition are not always detectable.
+
 ## Consistent pod backup
 
 Copying an active SQLite database without its WAL can silently omit recent data.

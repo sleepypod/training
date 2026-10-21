@@ -13,6 +13,10 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+from progress import update
+
+FIT_COUNT = 0
+
 import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -31,6 +35,8 @@ CANDIDATES = ('existing_depth8', 'balanced_leaf5', 'balanced_leaf10', 'balanced_
 
 
 def fit(name, nights):
+    global FIT_COUNT
+    update("Training", f"Fitting {name}", completedFits=FIT_COUNT)
     rows = [(r['x'], r['y']) for n in nights for r in n['rows'] if r['y'] is not None]
     if name == 'existing_depth8':
         rows = pm.oversample(rows)
@@ -42,7 +48,10 @@ def fit(name, nights):
         clf = RandomForestClassifier(n_estimators=200, max_depth=6 if name == 'balanced_leaf10' else 8,
             min_samples_leaf={'balanced_leaf5': 5, 'balanced_leaf10': 10}.get(name, 1),
             class_weight=None if name == 'existing_depth8' else 'balanced_subsample', random_state=42, n_jobs=1)
-    return clf.fit(x, y)
+    fitted = clf.fit(x, y)
+    FIT_COUNT += 1
+    update("Training", f"Finished {name}", completedFits=FIT_COUNT)
+    return fitted
 
 
 def postprocess(predictions, ruleset):
@@ -139,6 +148,7 @@ def main():
         prospective=False, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
     outputs = {name: ([], []) for name in (*CANDIDATES, 'nested', 'rules', 'always_light')}
+    update("Training", "Starting nested whole-night evaluation", completedFits=0, totalFits=len(groups) * 16 + 27, completedFolds=0, totalFolds=len(groups))
     folds = []
     for group in groups:
         train = [n for n in nights if n['group'] != group]
@@ -161,13 +171,14 @@ def main():
         outputs['rules'][0].extend(r['y'] for r in rule_rows)
         outputs['rules'][1].extend(r['rule'] for r in rule_rows)
         folds.append(fold)
-        print(f'{group}: selected {winner}; outer {fold["scores"][winner]}', flush=True)
+        update("Training", f"Held-out night {len(folds)}/{len(groups)} complete: {winner}", completedFolds=len(folds))
     scores = {name: metrics(y, p) for name, (y, p) in outputs.items()}
     # A chronological audit, also retrospective: last two groups were already
     # inspected in earlier work and are not advertised as untouched holdouts.
     early = [n for n in nights if n['group'] not in groups[-2:]]
     recent = [n for n in nights if n['group'] in groups[-2:]]
     temporal_name, _ = inner_choice(early, ruleset)
+    update('Training', 'Chronological audit', totalFits=len(groups) * 16 + 25 + len(set([temporal_name, 'existing_depth8'])))
     temporal = {'selected': temporal_name, 'groups': groups[-2:], 'scores': {}}
     for name in dict.fromkeys([temporal_name, 'existing_depth8']):
         temporal['scores'][name] = metrics(*predict(fit(name, early), recent, ruleset))
@@ -179,6 +190,7 @@ def main():
         'note': 'Descriptive only: overlapping CV training sets make this approximate.'}
     final_name, final_inner = inner_choice(nights, ruleset)
     clf = fit(final_name, nights)
+    update('Export', 'Verifying portable export against sklearn')
     artifact = export(clf, final_name, data, args.out, scores['nested'])
     report = dict(protocol=protocol, groups=len(groups), sessions=len(nights),
         classCounts=dict(Counter(outputs['nested'][0])),
@@ -190,7 +202,7 @@ def main():
             'Per-candidate outer scores are exploratory; nested score evaluates the selection procedure.',
             'No upload or activation performed.'])
     (args.out / 'report.json').write_text(json.dumps(report, indent=2))
-    print(json.dumps({'scores': scores, 'finalSelected': final_name, 'artifact': artifact}, indent=2), flush=True)
+    print(f'Evaluation complete: selected {final_name}; nested macro F1 {scores["nested"]["macroF1"]:.3f}', flush=True)
 
 
 if __name__ == '__main__':
