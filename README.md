@@ -1,7 +1,7 @@
 # Training
 
 `sleepypod/training` — offline sleep-stage model training and an
-[OKF knowledge base](knowledge/index.md). Hosted privately at
+[OKF knowledge base](knowledge/index.md). Available publicly at
 [sleepypod/training](https://github.com/sleepypod/training).
 
 ## Training workspace
