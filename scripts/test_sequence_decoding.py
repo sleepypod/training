@@ -111,8 +111,11 @@ class SequenceDecodingTests(unittest.TestCase):
                 m.main()
             unlabeled = nights[:5] + [{**session([None, None], start=900_000), 'group': 'g9'}]
             features.write_text(json.dumps({'nights': unlabeled, 'ruleset': {}, 'sources': {}}))
-            with patch('sys.argv', ['x', str(features), '--out', str(Path(root) / 'u')]), self.assertRaisesRegex(ValueError, 'g9'):
+            with patch.object(m.rm, 'fit') as fit, patch.object(m, 'decode') as decode, \
+                    patch('sys.argv', ['x', str(features), '--out', str(Path(root) / 'u')]), self.assertRaisesRegex(ValueError, 'g9'):
                 m.main()
+            fit.assert_not_called()
+            decode.assert_not_called()
             self.assertFalse((Path(root) / 'u').exists())
             features.write_text(json.dumps({'nights': nights, 'ruleset': {}, 'sources': {}}))
             (Path(root) / 'b').mkdir()
