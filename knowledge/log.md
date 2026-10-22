@@ -1,5 +1,9 @@
 # Knowledge update log
 
+## 2026-10-21
+
+- **Update**: Captured [light-sleep confusion](evaluation/light-sleep-confusion-2026-10-21.md): held-out confusion, feature separation, Watch transition structure and ranked experiments. Linked from [research priorities](operations/research-priorities.md) and the overnight capture plan. No model activation.
+
 ## 2026-10-20
 
 - **Creation**: Established the OKF v0.2 bundle and captured [retraining findings](evaluation/findings-2026-10-20.md) as drafts with aggregate evidence. No model activation or publication.

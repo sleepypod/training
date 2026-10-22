@@ -15,4 +15,6 @@ sources: [{"resource": "/references/training-run.md", "title": "Training run pro
 4. Evaluate temporal models and finer epochs only with reliable alignment and separate held-out comparisons.
 5. Define a causal feature contract if live staging is a product requirement.
 
+[Light-sleep confusion](../evaluation/light-sleep-confusion-2026-10-21.md) ranks concrete experiments under items 3 and 4: sequence decoding, context features, heart-rate coverage and short-window breathing irregularity.
+
 These are hypotheses and proposed work, not demonstrated improvements. Training longer or adding tree depth alone does not resolve limited subjects, label quality, or sparse wake labels. See [findings](../evaluation/findings-2026-10-20.md).
