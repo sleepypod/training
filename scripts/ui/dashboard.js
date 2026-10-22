@@ -3024,6 +3024,7 @@ function renderSnoreNight(host) {
             stroke: '#96988b',
             'stroke-dasharray': '4 3',
           }),
+          // Short labels fit the right margin; the caption names the session and channel.
           svgEl(
             'text',
             {
@@ -3032,7 +3033,7 @@ function renderSnoreNight(host) {
               fill: '#96988b',
               'font-size': 11,
             },
-            `scripted ${name} (${ref.channel})`,
+            name,
           ),
         );
       }
