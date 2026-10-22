@@ -215,6 +215,40 @@ folder to retain evaluation results, feature contracts, provenance, and parity
 checks. These local artifacts are Git-ignored; back them up separately.
 Saving or downloading a candidate does not activate it on the pod.
 
+## Piezo bandwidth gate
+
+Checks whether the pod's raw piezo channels carry 16–30 Hz and 60–100 Hz energy
+before any snoring capture is built (section 0 of the
+[overnight capture plan](docs/overnight-capture-implementation-plan.md)).
+
+```sh
+uv run --locked python scripts/piezo_bandwidth.py session --side left --pod 192.168.1.88 --out data/bandwidth/steps.json
+uv run --locked python scripts/piezo_bandwidth.py analyze --steps data/bandwidth/steps.json --pod 192.168.1.88 --out data/bandwidth/session
+uv run --locked python scripts/piezo_bandwidth.py night --start 2026-10-22T23:00-07:00 --end 2026-10-23T07:00-07:00 --pod 192.168.1.88 --out data/bandwidth/night
+```
+
+`session` walks through seven one-minute steps (empty bed with pump off and on,
+lying still, humming, imitated snoring, knocks at the head and foot) and saves
+each step's UTC window plus a coarse pod clock offset read from the HTTP `Date`
+of `GET /api/settings`. Run `analyze` after the session. It downloads the
+pod's raw files with `GET /api/export/archive` (read-only), shifts step windows
+by the measured offset, and scores the pass bar fixed in `PASS_BAR`: a band
+passes when humming or snoring raises it at least 6 dB over lying still on the
+occupant's channel. Each step used for scoring needs 80% of its samples. The
+outcome is `both-bands`, `low-band-only`, `high-band-only`, `neither`, or
+`incomplete` when a needed step lacks data. Knocks are scored separately: both
+knock steps need at least three transients on every channel present. They gate
+the knock clock sync, not the band outcome.
+
+Finished pod frames can wait up to about 30 minutes before the export sees
+them; both commands warn when data ends early, so fetch again into a fresh
+`--out`. `night` reports channel count, coverage, archive gzip ratio and
+hourly band-power percentiles for one night; run it the next morning, before
+the pod's disk-usage pruner can remove the night. Add `--export path.tar.gz` to
+either command to reanalyse a saved download. A failed or truncated download is
+deleted. Downloads and reports stay under ignored `data/`; reports hold spectra
+summaries, not samples.
+
 ## Validate without personal data
 
 ```sh
