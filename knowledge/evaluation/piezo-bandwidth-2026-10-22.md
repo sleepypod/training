@@ -1,7 +1,7 @@
 ---
 type: "Experimental finding"
 title: "Piezo bandwidth gate: 2026-10-22"
-description: "In one scripted session on one pod, imitated snoring raised raw piezo energy in both snore bands well above the pass bar; real snoring is untested."
+description: "In one scripted session on one pod, imitated snoring raised raw piezo energy in both snore bands well above the pass bar; real snoring and the full-night dump are not yet covered."
 status: "draft"
 generated: {"by": "claude/opus-5.5", "at": "2026-10-22T09:40:00+00:00"}
 sources: [{"resource": "Local scripted session data/bandwidth/steps.json and analyze report data/bandwidth/session/report.json (identical to the earlier preview) under ignored data/, from scripts/piezo_bandwidth.py", "title": "Bandwidth gate session and report"}, {"resource": "/evaluation/light-sleep-confusion-2026-10-21.md", "title": "Why raw piezo also matters for staging"}]
@@ -9,11 +9,11 @@ sources: [{"resource": "Local scripted session data/bandwidth/steps.json and ana
 
 # Piezo bandwidth gate: 2026-10-22
 
-The pod's raw piezo channels carry energy in both proposed snore bands. Imitated snoring raised 16–30 Hz by 9.6 dB and 60–100 Hz by 27.5 dB over lying still on the occupant's channel, against a pre-committed bar of 6 dB. Outcome: `both-bands`, so section 0 of the overnight capture plan (`docs/overnight-capture-implementation-plan.md`) passes and the plan proceeds in its delivery order. One participant, one pod, one session, imitated rather than real snoring.
+The pod's raw piezo channels carry energy in both proposed snore bands. Imitated snoring raised 16–30 Hz by 9.6 dB and 60–100 Hz by 27.5 dB over lying still on the occupant's channel, against a pre-committed bar of 6 dB. Outcome: `both-bands` for the scripted band test of section 0 of the overnight capture plan (`docs/overnight-capture-implementation-plan.md`). Section 0's full occupied-night dump (coverage, compression and write load) is still pending, so section 0 is not yet complete. One participant, one pod, one session, imitated rather than real snoring.
 
 ## Measured: session
 
-`scripts/piezo_bandwidth.py`, seven 60 s steps on 2026-10-22 between 02:11 and 02:26 local time (America/Los_Angeles). Steps were timed remotely by chat command instead of the interactive `session` prompt; windows were shifted by the measured pod clock offset (−0.5 s). Two channels (`left1`, `right1`) at 500 Hz. Every analyzed window had at least 99.9% sample coverage, no decode errors and at most 27 lost samples. The occupant lay on the left side. The other sleeper was out of the bed for the whole session. Pump speed confirmed the protocol: up to 1,944 rpm in the pump-on step and 0 in every other step.
+`scripts/piezo_bandwidth.py`, seven 60 s steps on 2026-10-22 between 02:11 and 02:26 local time (America/Los_Angeles). Steps were timed remotely by chat command instead of the interactive `session` prompt; windows were shifted by the measured pod clock offset (−0.5 s). Two channels (`left1`, `right1`) at 500 Hz. Each analyzed window is the 45 s left after trimming; every one had at least 99.88% sample coverage (22,474 of 22,500 samples), no decode errors and at most 27 lost samples, 1 of them interpolated. The occupant lay on the left side. The other sleeper was out of the bed for the whole session. Pump speed confirmed the protocol: up to 1,944 rpm in the pump-on step and 0 in every other step.
 
 Band power in dB (arbitrary ADC units, Welch, 2 s windows, first 10 s and last 5 s of each step dropped):
 
