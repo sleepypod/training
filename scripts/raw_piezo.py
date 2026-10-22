@@ -155,7 +155,7 @@ def records(raw_bytes):
             for rec in inner_records(data):
                 if isinstance(rec, dict):
                     yield rec, None
-        except ValueError as error:
+        except (ValueError, TypeError) as error:  # TypeError: unhashable map key
             yield None, str(error)
 
 

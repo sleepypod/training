@@ -6,13 +6,15 @@ Section 0 of docs/overnight-capture-implementation-plan.md. Three commands:
   analyze  Fetch (or read) the raw export for a session and score the fixed pass bar.
   night    Storage, coverage and hourly band power for one overnight export.
 
-Read-only: the only pod request is GET /api/export/archive. Exports and reports
-stay under ignored data/. Reports hold spectra summaries, never raw samples.
+Read-only: the pod requests are GET /api/settings (coarse clock check) and
+GET /api/export/archive. Exports and reports stay under ignored data/. Reports
+hold spectra summaries, never raw samples.
 """
 import argparse
 import hashlib
 import json
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -31,6 +33,10 @@ NPERSEG = 1000  # 2 s windows, 0.5 Hz resolution
 BANDS = {'16-30Hz': (16.0, 30.0), '60-100Hz': (60.0, 100.0)}
 CONTEXT_BANDS = {'1-10Hz': (1.0, 10.0), '100-245Hz': (100.0, 245.0)}
 TRIM_START_S, TRIM_END_S = 10, 5
+MIN_COVERAGE = 0.8  # a scored step needs this fraction of its expected samples
+# The export keeps files with mtime <= endTs; the live file's mtime is the pod's
+# current second, so ask for everything up to a day ahead instead of "now".
+EXPORT_END_SLACK_S = 86_400
 
 # Pass bar, fixed before any session is recorded. Do not tune on results.
 PASS_BAR = {
@@ -64,8 +70,11 @@ def pod_clock_offset_ms(pod):
     """Pod HTTP Date minus local time; 1 s resolution, a coarse check only."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     before = now_ms()
-    with opener.open(base_url(pod) + '/api/raw/files', timeout=10) as response:
-        header = response.headers.get('Date')
+    try:
+        with opener.open(base_url(pod) + '/api/settings', timeout=10) as response:
+            header = response.headers.get('Date')
+    except urllib.error.HTTPError as error:
+        header = error.headers.get('Date')
     after = now_ms()
     if not header:
         return None
@@ -89,10 +98,19 @@ def fetch_export(pod, start_s, end_s, out):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     out.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
-    with opener.open(url, timeout=600) as response, open(out, 'wb') as f:
-        while chunk := response.read(1 << 20):
-            f.write(chunk)
-            digest.update(chunk)
+    try:
+        with opener.open(url, timeout=600) as response, open(out, 'wb') as f:
+            declared = response.headers.get('Content-Length')
+            while chunk := response.read(1 << 20):
+                f.write(chunk)
+                digest.update(chunk)
+        if declared is not None and out.stat().st_size != int(declared):
+            raise OSError(f'Export truncated: {out.stat().st_size} of {declared} bytes')
+        with tarfile.open(out, 'r:gz') as tar:  # a streamed tarball has no length; check it is whole
+            tar.getmembers()
+    except BaseException:
+        out.unlink(missing_ok=True)  # a partial download must not block a retry into the same --out
+        raise
     return {'url': url, 'bytes': out.stat().st_size, 'sha256': digest.hexdigest()}
 
 
@@ -170,23 +188,32 @@ def pump_rpm(recs, start_s, end_s):
             'medianRpm': float(np.median(values)) if values else None}
 
 
-def step_window(step):
-    return step['startMs'] // 1000 + TRIM_START_S, step['endMs'] // 1000 - TRIM_END_S
+def step_window(step, offset_ms=0):
+    """Analyzed pod-clock window for a laptop-clock step; offset is pod minus laptop."""
+    return ((step['startMs'] + offset_ms) // 1000 + TRIM_START_S,
+            (step['endMs'] + offset_ms) // 1000 - TRIM_END_S)
 
 
-def analyze_steps(recs, steps, side):
+def covered(report_steps, name, channel):
+    stats = report_steps.get(name, {}).get('channels', {}).get(channel, {})
+    return stats.get('coverage', 0) >= MIN_COVERAGE and 'bandDb' in stats
+
+
+def analyze_steps(recs, steps, side, offset_ms=0):
     seconds, duplicates = raw_piezo.piezo_seconds(recs)
     present = channels_present(seconds)
     by_name = {s['name']: s for s in steps}
     spectra, report_steps = {}, {}
     for step in steps:
-        start_s, end_s = step_window(step)
+        start_s, end_s = step_window(step, offset_ms)
         entry = {'analyzedStartS': start_s, 'analyzedEndS': end_s, 'pump': pump_rpm(recs, start_s, end_s), 'channels': {}}
         for channel in present:
             segs, interpolated, dropped = raw_piezo.segments(seconds, channel, start_s, end_s)
             freqs, p, windows = psd(segs)
-            stats = {'samples': int(sum(map(len, segs))), 'expectedSamples': (end_s - start_s) * FS,
+            expected = max(0, end_s - start_s) * FS
+            stats = {'samples': int(sum(map(len, segs))), 'expectedSamples': expected,
                      'interpolatedSamples': interpolated, 'droppedSamples': dropped, 'welchWindows': windows}
+            stats['coverage'] = stats['samples'] / expected if expected else 0.0
             if windows:
                 spectra[(step['name'], channel)] = (freqs, p, [g for g in segs if len(g) >= NPERSEG])
                 stats['bandDb'] = {k: band_db(freqs, p, b) for k, b in {**BANDS, **CONTEXT_BANDS}.items()}
@@ -203,9 +230,9 @@ def analyze_steps(recs, steps, side):
         rises = {}
         for stimulus in PASS_BAR['stimuli']:
             for channel in occupant:
-                ref = report_steps.get(reference, {}).get('channels', {}).get(channel, {}).get('bandDb', {}).get(band)
-                got = report_steps.get(stimulus, {}).get('channels', {}).get(channel, {}).get('bandDb', {}).get(band)
-                if ref is not None and got is not None:
+                if covered(report_steps, reference, channel) and covered(report_steps, stimulus, channel):
+                    ref = report_steps[reference]['channels'][channel]['bandDb'][band]
+                    got = report_steps[stimulus]['channels'][channel]['bandDb'][band]
                     rises[f'{stimulus}/{channel}'] = got - ref
         best = max(rises.values()) if rises else None
         bands[band] = {'risesDb': rises, 'bestRiseDb': best,
@@ -220,15 +247,16 @@ def analyze_steps(recs, steps, side):
         for channel in present:
             ref = spectra.get((reference, channel))
             got = spectra.get((name, channel))
-            if not ref or not got:
+            if not (covered(report_steps, reference, channel) and covered(report_steps, name, channel)):
                 knocks[name][channel] = None
                 continue
             ref_hp = np.concatenate([highpass(s, PASS_BAR['knockHighpassHz']) for s in ref[2]])
             threshold = PASS_BAR['knockSigma'] * robust_sigma(ref_hp)
             hp = [highpass(s, PASS_BAR['knockHighpassHz']) for s in got[2]]
             knocks[name][channel] = transient_events(hp, threshold, PASS_BAR['knockMinSeparationS'])
-    knock_pass = any(all((n or 0) >= PASS_BAR['knockMinEvents'] for n in per.values()) and per
-                     for per in knocks.values())
+    # Every knock step must show enough events on every channel present.
+    knock_pass = (set(knocks) == set(PASS_BAR['knockSteps']) and
+                  all(per and all((n or 0) >= PASS_BAR['knockMinEvents'] for n in per.values()) for per in knocks.values()))
 
     passed = [b for b, r in bands.items() if r['passed']]
     if not all(r['evaluated'] for r in bands.values()):
@@ -241,7 +269,13 @@ def analyze_steps(recs, steps, side):
         outcome = 'high-band-only'
     else:
         outcome = 'neither'
+    warnings = []
+    last_needed = max((step_window(s, offset_ms)[1] for s in steps), default=None)
+    if seconds and last_needed is not None and max(seconds) < last_needed - 1:
+        warnings.append(f'Piezo data ends at {max(seconds)}, before the last step ends at {last_needed}; '
+                        'fetch again after the pod finishes writing (up to ~30 min).')
     return {'passBar': PASS_BAR, 'side': side, 'channels': present, 'occupantChannels': occupant,
+            'clockOffsetAppliedMs': offset_ms, 'minCoverage': MIN_COVERAGE, 'warnings': warnings,
             'duplicateSeconds': duplicates, 'steps': report_steps, 'bands': bands,
             'knockEvents': knocks, 'knockPassed': bool(knock_pass), 'outcome': outcome}
 
@@ -272,10 +306,14 @@ def analyze_night(recs, files, start_s, end_s):
     raw = sum(f['rawBytes'] for f in files)
     archived = [f for f in files if f['name'].lower().endswith('.gz')]
     archived_raw = sum(f['rawBytes'] for f in archived)
-    covered = len(in_window)
+    covered_seconds = len(in_window)
+    warnings = []
+    if not in_window or max(in_window) < end_s - 60:
+        warnings.append('Data ends before --end. Finished pod frames wait up to ~30 min before the export can '
+                        'see them; rerun later with a fresh --out.')
     return {'channels': present, 'freq': sorted({e.get('freq') for e in seconds.values()} - {None}),
-            'duplicateSeconds': duplicates, 'windowSeconds': int(end_s - start_s), 'piezoSeconds': covered,
-            'coverage': covered / max(1, end_s - start_s),
+            'duplicateSeconds': duplicates, 'windowSeconds': int(end_s - start_s), 'piezoSeconds': covered_seconds,
+            'coverage': covered_seconds / max(1, end_s - start_s), 'warnings': warnings,
             'storage': {'files': len(files), 'exportCompressedBytes': compressed, 'exportRawBytes': raw,
                         'compressionRatio': compressed / raw if raw else None,
                         'archiveGzipRatio': sum(f['compressedBytes'] for f in archived) / archived_raw if archived_raw else None,
@@ -290,7 +328,8 @@ def summary_lines(report):
     for band, r in report['bands'].items():
         best = 'n/a' if r['bestRiseDb'] is None else f"{r['bestRiseDb']:+.1f} dB"
         lines.append(f"  {band}: best rise {best} vs {PASS_BAR['reference']} → {'PASS' if r['passed'] else 'fail'}")
-    lines.append(f"  knocks: {report['knockEvents']} → {'PASS' if report['knockPassed'] else 'fail'}")
+    lines.append(f"  knocks (gates clock sync, not the band outcome): {report['knockEvents']} → {'PASS' if report['knockPassed'] else 'fail'}")
+    lines.extend(f'  warning: {w}' for w in report['warnings'])
     for name, step in report['steps'].items():
         pump = step['pump']['maxRpm']
         cells = '  '.join(f"{c} " + (' '.join(f"{k}={v:.1f}" for k, v in s.get('bandDb', {}).items()) or 'no data')
@@ -348,9 +387,10 @@ def cmd_analyze(args):
     session = json.loads(Path(args.steps).read_text())
     out = prepare_output(args.out)
     start_s = min(s['startMs'] for s in session['steps']) // 1000 - 60
-    path, source = obtain_export(args, out, start_s, time.time())
+    path, source = obtain_export(args, out, start_s, time.time() + EXPORT_END_SLACK_S)
     recs, errors, files = load_export(path)
-    report = analyze_steps(recs, session['steps'], args.side or session['side'])
+    offset = (session.get('podClockOffsetMs') or {}).get('start') or 0
+    report = analyze_steps(recs, session['steps'], args.side or session['side'], offset)
     report.update(version='piezo-bandwidth-report-v1', generatedAt=datetime.now(timezone.utc).isoformat(),
                   source=source, files=files, decodeErrors=errors,
                   scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -374,7 +414,7 @@ def cmd_night(args):
     start_s, end_s = parse_time(args.start), parse_time(args.end)
     if end_s <= start_s:
         raise SystemExit('--end must be after --start')
-    path, source = obtain_export(args, out, start_s, time.time())
+    path, source = obtain_export(args, out, start_s, time.time() + EXPORT_END_SLACK_S)
     recs, errors, files = load_export(path)
     report = analyze_night(recs, files, start_s, end_s)
     report.update(version='piezo-night-report-v1', generatedAt=datetime.now(timezone.utc).isoformat(),
@@ -383,8 +423,10 @@ def cmd_night(args):
     s = report['storage']
     print(f"Channels {report['channels']} at {report['freq']} Hz · coverage {report['coverage']:.1%} of {report['windowSeconds'] / 3600:.1f} h")
     ratio = 'n/a' if s['archiveGzipRatio'] is None else f"{s['archiveGzipRatio']:.2f}"
-    print(f"Export {s['exportCompressedBytes'] / 1e6:.0f} MB as fetched / {s['exportRawBytes'] / 1e6:.0f} MB decompressed (archive gzip ratio {ratio}); "
+    print(f"Export {report['source']['bytes'] / 1e6:.0f} MB downloaded / {s['exportRawBytes'] / 1e6:.0f} MB decompressed (archive gzip ratio {ratio}); "
           f"piezo samples alone {s['piezoSampleBytesPerHour'] * report['windowSeconds'] / 3600 / 1e6:.0f} MB")
+    for warning in report['warnings']:
+        print(f'Warning: {warning}')
     print(f'Report: {out / "report.json"}')
 
 

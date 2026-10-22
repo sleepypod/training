@@ -51,7 +51,7 @@ def piezo(ts, left, right):
             'left1': np.asarray(left, '<i4').tobytes(), 'right1': np.asarray(right, '<i4').tobytes()}
 
 
-def synthetic_session(low=True, high=True, knocks=True, start=1_800_000_000):
+def synthetic_session(low=True, high=True, knocks=('knock_head', 'knock_foot'), start=1_800_000_000):
     """Seven 60 s steps of noise; hum/snore add tones on the left channel, knocks add impulses to both."""
     rng = np.random.default_rng(7)
     recs, steps, t = [], [], start
@@ -64,7 +64,7 @@ def synthetic_session(low=True, high=True, knocks=True, start=1_800_000_000):
             right = base + rng.normal(0, 50, 500)
             if name in ('occupied_hum', 'occupied_snore'):
                 left += (400 * np.sin(2 * np.pi * 22 * n) if low else 0) + (400 * np.sin(2 * np.pi * 80 * n) if high else 0)
-            if knocks and name.startswith('knock') and second in (20, 22, 24):
+            if knocks and name in knocks and second in (20, 22, 24):
                 left[250:256] += 20_000
                 right[250:256] += 15_000
             recs.append(piezo(t + second, left.round(), right.round()))
@@ -197,9 +197,39 @@ class BandwidthGateTests(unittest.TestCase):
         self.assertLess(report['bands']['60-100Hz']['bestRiseDb'], pb.PASS_BAR['minRiseDb'])
 
     def test_wrong_side_and_no_knocks_fail(self):
-        report = pb.analyze_steps(*synthetic_session(knocks=False), 'right')
+        report = pb.analyze_steps(*synthetic_session(knocks=()), 'right')
         self.assertEqual(report['outcome'], 'neither')
         self.assertFalse(report['knockPassed'])
+
+    def test_knocks_must_pass_in_every_knock_step(self):
+        report = pb.analyze_steps(*synthetic_session(knocks=('knock_head',)), 'left')
+        self.assertEqual(report['knockEvents']['knock_head'], {'left1': 3, 'right1': 3})
+        self.assertFalse(report['knockPassed'])
+
+    def test_steps_below_minimum_coverage_are_incomplete(self):
+        recs, steps = synthetic_session()
+        hum = next(s for s in steps if s['name'] == 'occupied_hum')
+        snore = next(s for s in steps if s['name'] == 'occupied_snore')
+        keep = [r for r in recs if not (hum['startMs'] // 1000 + 25 <= r['ts'] < snore['endMs'] // 1000)]
+        report = pb.analyze_steps(keep, steps, 'left')
+        self.assertLess(report['steps']['occupied_hum']['channels']['left1']['coverage'], pb.MIN_COVERAGE)
+        self.assertEqual(report['outcome'], 'incomplete')
+
+    def test_pod_clock_offset_realigns_windows_exactly(self):
+        recs, steps = synthetic_session()
+        shifted = [{**r, 'ts': r['ts'] + 30} for r in recs]
+        aligned = pb.analyze_steps(shifted, steps, 'left', offset_ms=30_000)
+        reference = pb.analyze_steps(recs, steps, 'left')
+        self.assertEqual(aligned['bands'], reference['bands'])
+        self.assertEqual(aligned['knockEvents'], reference['knockEvents'])
+        self.assertEqual(aligned['clockOffsetAppliedMs'], 30_000)
+
+    def test_warns_when_data_ends_before_the_last_step(self):
+        recs, steps = synthetic_session()
+        report = pb.analyze_steps([r for r in recs if r['ts'] < steps[-1]['startMs'] // 1000], steps, 'left')
+        self.assertTrue(report['warnings'])
+        self.assertFalse(report['knockPassed'])
+        self.assertEqual(pb.analyze_steps(recs, steps, 'left')['warnings'], [])
 
     def test_high_band_alone_and_missing_knock_step(self):
         recs, steps = synthetic_session(low=False)
@@ -225,6 +255,23 @@ class BandwidthGateTests(unittest.TestCase):
         self.assertEqual(recs, [])
         self.assertEqual(errors, [{'file': '00000001.RAW.gz', 'error': 'Expected data key'}])
         self.assertEqual(files[0]['records'], 0)
+
+    def test_clock_offset_reads_date_from_error_responses(self):
+        error = pb.urllib.error.HTTPError('http://pod/api/settings', 400, 'bad', {'Date': 'Thu, 22 Oct 2026 01:48:50 GMT'}, None)
+        class Opener:
+            def open(self, url, timeout):
+                self.url = url
+                raise error
+        opener = Opener()
+        with patch.object(pb.urllib.request, 'build_opener', return_value=opener), \
+                patch.object(pb, 'now_ms', return_value=1792633730000):
+            self.assertEqual(pb.pod_clock_offset_ms('127.0.0.1'), 0)
+        self.assertTrue(opener.url.endswith('/api/settings'))
+
+    def test_unhashable_map_keys_are_reported(self):
+        (rec, error), = list(rp.records(outer(1, b'\xa1\x81\x01\x01')))
+        self.assertIsNone(rec)
+        self.assertIn('unhashable', error)
 
     def test_clock_offset_without_date_header_is_unknown(self):
         class Response:
@@ -253,6 +300,7 @@ class BandwidthGateTests(unittest.TestCase):
         self.assertEqual(report['storage']['archiveGzipRatio'], 0.6)
         self.assertEqual(report['hours'][0]['piezoSeconds'], 420)
         self.assertEqual(report['hours'][1]['piezoSeconds'], 0)
+        self.assertIn('Data ends before --end', report['warnings'][0])
 
 
 def export_tarball(recs):
@@ -350,6 +398,35 @@ class CommandTests(unittest.TestCase):
         self.assertIn('Outcome: both-bands', text)
         self.assertIn('Outcome: both-bands', again)
 
+    def test_failed_download_leaves_no_partial_export(self):
+        class Truncating(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Length', '1000')
+                self.end_headers()
+                self.wfile.write(b'x' * 10)
+
+            def log_message(self, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Truncating)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                out = Path(d) / 'export.tar.gz'
+                with self.assertRaisesRegex(OSError, 'truncated'):
+                    pb.fetch_export(f'127.0.0.1:{server.server_address[1]}', 0, 1, out)
+                self.assertFalse(out.exists())
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_corrupt_streamed_export_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d, fake_pod(gzip.compress(b'not a tarball')) as (pod, _):
+            out = Path(d) / 'export.tar.gz'
+            with self.assertRaises(tarfile.TarError):
+                pb.fetch_export(pod, 0, 1, out)
+            self.assertFalse(out.exists())
+
     def test_night_command_and_time_parsing(self):
         recs, steps = synthetic_session()
         start = steps[0]['startMs'] // 1000
@@ -358,10 +435,13 @@ class CommandTests(unittest.TestCase):
             export.write_bytes(export_tarball(recs))
             text = self.run_main('night', '--start', str(start), '--end', str(start + 420), '--export', str(export), '--out', str(Path(d) / 'n'))
             report = json.loads((Path(d) / 'n/report.json').read_text())
+            late = self.run_main('night', '--start', str(start), '--end', str(start + 3600), '--export', str(export), '--out', str(Path(d) / 'late'))
             with self.assertRaises(SystemExit):
                 self.run_main('night', '--start', str(start), '--end', str(start), '--export', str(export), '--out', str(Path(d) / 'm'))
         self.assertEqual(report['coverage'], 1.0)
+        self.assertEqual(report['warnings'], [])
         self.assertIn('archive gzip ratio', text)
+        self.assertIn('Warning: Data ends before --end', late)
         self.assertEqual(pb.parse_time('2026-10-22T23:00-07:00'), int(datetime(2026, 10, 23, 6, tzinfo=timezone.utc).timestamp()))
         self.assertEqual(pb.parse_time('1793253600'), 1793253600)
         with self.assertRaises(SystemExit):
