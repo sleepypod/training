@@ -34,7 +34,7 @@ Start from Apple's built-in Sound Analysis classifier, whose label set includes 
 
 ## Raw piezo storage
 
-Two int32 channels at 500 Hz are 14.4 MB/hour, about 115 MB per 8-hour night uncompressed. Gate capture on a measured pod free-space floor; cap pod-side retention at two nights; compress losslessly in closed chunks; delete from the pod only after checksum-acknowledged retrieval to the training workspace's ignored data/raw/. Verify the 16–30 Hz and 60–100 Hz bands survive the sensor front end before building on them.
+Reuse the pod's existing RAW archive (`/persistent/biometrics-archive/*.RAW.gz`) and `/api/export/archive` retrieval. Each int32 channel at 500 Hz is 7.2 MB/hour: about 115 MB per 8-hour night for two channels, 230 MB if `left2`/`right2` are present, before gzip. Pin capture sessions so the disk-usage pruner cannot delete them before checksum-verified retrieval to the training workspace's ignored data/raw/; cap pins at two nights. Verify the 16–30 Hz and 60–100 Hz bands survive the sensor front end before building on them.
 
 ## Model and evaluation boundaries
 

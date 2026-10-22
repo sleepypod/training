@@ -78,19 +78,26 @@ Acceptance: physical-iPhone overnight testing; explicit denied/revoked permissio
 
 ## 3. Synchronized raw pod piezo
 
-- Reuse existing raw-data/archive infrastructure where suitable.
-- Preserve both channels at their native sampling rate before heart-rate or breathing filtering.
-- Add bounded sessions, storage limits, checksums, durable acknowledgments and resumable retrieval.
-- Record occupancy, movement, pump activity and available hardware-state signals to investigate interference.
-- Align with the knock protocol in section 1 and retain uncertainty; never use transfer time as sample time.
-- Keep raw recordings and derived private artifacts under ignored data/ directories.
+The pod already records the raw stream; this section reuses it rather than adding a capture path. In sleepypod-core:
 
-Storage budget, decided before anything writes to pod storage:
+- Firmware writes CBOR RAW frames to the `/persistent/biometrics` tmpfs (500 MB). Each `piezo-dual` record carries `ts` (whole Unix seconds), `freq`, and about 500 int32 samples per channel in `left1` and `right1`, plus `left2`/`right2` on some hardware.
+- `modules/biometrics-archiver` gzips frames every 15 minutes into `/persistent/biometrics-archive/<seqno>.RAW.gz`.
+- `sleepypod-biometrics-pruner` deletes the oldest archives whenever `/persistent` is above 80% used. It does not know whether a file has been retrieved.
+- `GET /api/export/archive?startTs=&endTs=&include=raw` streams a tarball of `.RAW` and `.RAW.gz` files selected by file mtime; `modules/archive-push` can scp archives to a configured host instead.
 
-- Rate: 2 channels × 500 Hz × 4 bytes (int32) = 4 kB/s, 14.4 MB/hour, about 115 MB per 8-hour night uncompressed.
-- Compression: write closed chunks (for example 10 minutes) with lossless delta encoding plus a general-purpose compressor; record the measured ratio from the section 0 night. Never apply lossy compression to research capture.
-- Pod-side retention: a ring buffer capped at two nights of uncompressed-equivalent data (about 250 MB) and below a free-space floor measured on the pod's data partition before the cap is set. Capture refuses to start, rather than evicting unretrieved chunks, when the floor would be crossed.
-- Deletion: a chunk is deleted from the pod only after the Mac training workspace acknowledges it with a matching checksum.
+New work:
+
+- Retrieval: the training workspace pulls `/api/export/archive` for each session, padded by one archive interval (15 minutes) at both ends because selection is by file mtime, not record `ts`. It then filters records by reconstructed sample time and stores the files under ignored data/raw/ with SHA-256 checksums in the session manifest.
+- Session pinning: before capture starts, pin the session so the pruner skips archives overlapping it until the workspace confirms retrieval. Pruning resumes for pinned files only after acknowledgment or an explicit unpin. Pinning is the only pod-side change needed and is a small core PR to the pruner and an API to set and clear pins.
+- Sample timing: `ts` has 1 s resolution, so reconstruct sample times from continuous sample counts across records and fit a linear clock per session; record lost-sample markers and gaps. The section 1 knocks then fix the phone/pod offset.
+- Channels: preserve every channel present, including `left2`/`right2`, at native rate before any filtering. Record which channels the hardware provides in the session manifest.
+- Context: record occupancy, movement, pump activity and available hardware-state signals from the same RAW stream and biometrics database to investigate interference.
+- Never use transfer time as sample time. Keep raw recordings and derived private artifacts under ignored data/ directories.
+
+Storage budget:
+
+- Rate: 500 Hz × 4 bytes per channel = 2 kB/s, 7.2 MB/hour per channel. Two channels are about 115 MB per 8-hour night before gzip; four channels about 230 MB. The section 0 night measures the actual gzip ratio and channel count.
+- Pod: the existing archive on `/persistent` (about 10 GB free per the export route's staging note), bounded by the 80% pruner. Pinned sessions are capped at two nights; pinning a third fails until one is retrieved or unpinned. Measure free space before the first pin.
 - Permanent home: the Mac training workspace under ignored data/raw/, never Git and never the phone. Retention there is per-session and user-deletable; derived aggregates are what get committed after review.
 
 Control nights:
@@ -99,7 +106,7 @@ Control nights:
 - Occupied night with no snoring according to the iPhone detector and the sleeper, at least one night.
 - Use them to subtract pump and occupancy band energy from snore-window comparisons and to set false-positive baselines for section 5. Recompute them after hardware or firmware changes.
 
-Acceptance: recover from transfer interruption without duplication or silent loss; verify channel identities, sample timing, capacity limits, refusal at the free-space floor, ack-gated deletion and preservation of existing sensor processing.
+Acceptance: the pruner never deletes a pinned, unretrieved archive (test on synthetic disk pressure); retrieval recovers from interruption without duplication or silent loss and checksums round-trip; reconstructed sample times match a synthetic stream with injected gaps and lost samples; channel identities verified; existing archiver, export and sensor processing unchanged.
 
 ## 4. Comparison workspace
 
