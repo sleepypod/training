@@ -4,7 +4,7 @@ title: "Sequence decoding: 2026-10-21"
 description: "Dropping isolated-epoch smoothing helps the deployed-style forest; Viterbi adds a small gain mainly on the balanced forest. Neither is demonstrated."
 status: "draft"
 generated: {"by": "claude/opus-5.5", "at": "2026-10-22T02:15:00+00:00"}
-sources: [{"resource": "Local runs seqdecode-20261022T021425Z (final) and seqdecode-20261022T014842Z (superseded): report.json and protocol.json under ignored data/runs/, from scripts/sequence-decoding.py", "title": "Decoder ablation report"}, {"resource": "Local training workspace run 20261021T055014537710Z: features.json under ignored data/runs/", "title": "Labeled feature epochs"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]
+sources: [{"resource": "Local runs seqdecode-20261022T021425Z (final) and seqdecode-20261022T014842Z (superseded): report.json and protocol.json under ignored data/runs/, from scripts/sequence-decoding.py", "title": "Decoder ablation report"}, {"resource": "Local training workspace run 20261021T055014537710Z: features.json under ignored data/runs/", "title": "Labeled feature epochs"}, {"resource": "/evaluation/light-sleep-confusion-2026-10-21.md", "title": "Light-sleep confusion baseline"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]
 ---
 
 # Sequence decoding: 2026-10-21
@@ -26,7 +26,7 @@ On held-out nights, replacing the production isolated-epoch smoothing with plain
 | balanced_leaf10 / Viterbi | 0.436 | 0.359 | 0.60 | 0.64 | 0.69 | 106 | 66 | 38 | 24 | 2 | +0.018 (−0.002, +0.044) |
 | balanced_leaf10 / Viterbi, no deep↔REM | 0.436 | 0.358 | 0.60 | 0.62 | 0.68 | 105 | 64 | 40 | 25 | 0 | +0.019 (−0.000, +0.044) |
 
-Wake recall is 0 throughout (14 wake epochs). The production baseline reproduces the existing_depth8 confusion cells reported in the light-sleep confusion analysis of the same date.
+Wake recall is 0 throughout (14 wake epochs). The production baseline reproduces the existing_depth8 confusion cells reported in [light-sleep confusion](light-sleep-confusion-2026-10-21.md).
 
 ## Measured: hyperparameter selection
 
@@ -53,4 +53,4 @@ The first run divided probabilities by the training label prior as a grid option
 
 One participant, ten nights, already inspected; the grid was revised after seeing results from the earlier runs. Watch labels are not polysomnography. Forest probabilities are uncalibrated. The decoder applies a single transition step across recording gaps (seven gaps of 10–15 minutes and one of 160 minutes in this data). Night bootstrap intervals are approximate because outer training sets overlap. Not prospective; no export or activation.
 
-See [validation protocol](validation-protocol.md), [metrics](metrics.md) and [earlier findings](findings-2026-10-20.md).
+See [light-sleep confusion](light-sleep-confusion-2026-10-21.md), [validation protocol](validation-protocol.md), [metrics](metrics.md) and [earlier findings](findings-2026-10-20.md).
