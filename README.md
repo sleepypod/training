@@ -17,6 +17,38 @@ for the workflow and how it relates to personal models on the pod.
 These are unmodified captures of the running app with deterministic synthetic
 test data. The displayed scores illustrate the interface, not real-world accuracy.
 
+## Run it yourself
+
+You need a Mac (or Linux machine) on the same network as your pod, an Apple
+Watch that tracks sleep, and about ten minutes.
+
+1. **Install the tools.** With [Homebrew](https://brew.sh): `brew install node@24 git jq`.
+   (`jq` is only needed for the model-upload commands.)
+   The quickstart offers to install [uv](https://docs.astral.sh/uv/), which brings its own Python.
+2. **Get this repository:** `git clone https://github.com/sleepypod/training.git && cd training`.
+3. **Find your pod's address.** The sleepypod iOS app shows it under Settings.
+4. **Export your Watch sleep data** (skip this if the iOS app already syncs Watch data to the pod):
+   on the iPhone open Health, tap your profile picture, then **Export All Health Data**.
+   AirDrop or save `export.zip` to the Mac. Large exports take a few minutes.
+5. **Run the guided script:**
+
+   ```sh
+   scripts/quickstart.sh
+   ```
+
+   It checks Node.js and uv, installs the pinned dependencies, confirms it can reach
+   the pod, asks which side the Watch wearer sleeps on and where `export.zip` is, then
+   trains. Pass `--pod`, `--side` and `--watch-export` to skip the questions, or
+   `--dry-run` to check everything without training.
+6. **Read the results** in the dashboard link the script prints, or later with
+   `uv run --locked python scripts/dashboard.py`. Held-out macro F1 and κ for the
+   candidate, the existing baseline and the pod's rules are the numbers to compare;
+   see [interpreting model metrics](knowledge/evaluation/metrics.md).
+
+Training only reads from the pod. It needs at least five nights with Watch sleep
+stages, and more nights help most. To put a model on the pod, see
+[Use a trained model on the pod](#use-a-trained-model-on-the-pod).
+
 ## Setup
 
 Install Node.js 24 and `uv`, then from this repository:
@@ -248,6 +280,36 @@ the pod's disk-usage pruner can remove the night. Add `--export path.tar.gz` to
 either command to reanalyse a saved download. A failed or truncated download is
 deleted. Downloads and reports stay under ignored `data/`; reports hold spectra
 summaries, not samples.
+
+## Use a trained model on the pod
+
+Training never uploads or activates a model. These steps change what the pod shows,
+so do them deliberately, one side at a time. They need a pod build with personal
+stage models (core `dev`); `<pod>` is your pod's address and `RUN` your run folder.
+
+```sh
+# 1. Preview: stages recent nights with the candidate and compares it with the rules. Stores nothing.
+jq -n --slurpfile m RUN/model/candidate.json '{side:"left", nights:7, model:$m[0]}' |
+  curl -s -X POST -H 'Content-Type: application/json' -d @- http://<pod>:3000/api/sleep-stages/model/preview
+
+# 2. Add it to the side's model library. It is stored, not selected, not active.
+jq -n --slurpfile m RUN/model/candidate.json '{side:"left", model:$m[0]}' |
+  curl -s -X POST -H 'Content-Type: application/json' -d @- http://<pod>:3000/api/sleep-stages/models
+
+# 3. List the library, then select the new entry. "active": true makes it stage nights.
+curl -s 'http://<pod>:3000/api/sleep-stages/models?side=left'
+curl -s -X PUT -H 'Content-Type: application/json' -d '{"side":"left","id":ID,"active":true}' \
+  http://<pod>:3000/api/sleep-stages/models/selected
+```
+
+The pod refuses a model whose feature contract it does not know or whose embedded
+test vectors it does not reproduce. To go back to the rules, send `{"side":"left","active":false}`
+to `PUT /api/sleep-stages/model/active`, or use the switch in the pod's Settings. Do not use
+`PUT /api/sleep-stages/model` to try a model: on a side whose model is active it replaces
+the model that is staging nights immediately.
+
+The preview stages nights the candidate was trained on, so its agreement is in-sample and
+reads higher than the held-out scores in the report. Held-out scores are retrospective too. Treat activation as a trial: compare the next nights with the Watch before keeping it.
 
 ## Validate without personal data
 
