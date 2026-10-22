@@ -1,7 +1,7 @@
 ---
 type: "Experimental finding"
 title: "Light-sleep confusion: 2026-10-21"
-description: "Light is the hub stage that REM and deep collapse into; current features barely separate light from REM."
+description: "In this one-participant evaluation, light is the hub stage that REM and deep collapse into; current features barely separate light from REM."
 status: "draft"
 generated: {"by": "claude/opus-5.5", "at": "2026-10-22T02:40:00+00:00"}
 sources: [{"resource": "Local training workspace run 20261021T055014537710Z: model/report.json and features.json under ignored data/runs/", "title": "Held-out confusion matrices and labeled feature epochs"}, {"resource": "vendor/core/docs/research/sleep-stage-calibration/personal-models.py (pinned core copy; removed from current core) run locally on 2026-10-21 with --contract B, the ten-feature contract, 12 nights, leave-one-night-out", "title": "Mac personal-model retrain"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]

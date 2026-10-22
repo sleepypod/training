@@ -35,7 +35,7 @@ Outcomes:
 
 - Both bands pass: proceed in the delivery order below.
 - Only 16–30 Hz passes: restrict section 4 band rows and section 5 features to the low band; drop 60–100 Hz claims.
-- Neither passes: stop pod-side snore detection. Section 5 drops its piezo arm and section 7 is dropped; iPhone snore events remain a standalone summary. Raw piezo capture continues only for the staging research objective (breathing irregularity sits well below 16 Hz).
+- Neither passes: stop pod-side snore detection. The section 4 exit test is not applicable; milestone 2 is complete once the comparison workspace meets its acceptance criteria. Section 5 drops its piezo arm and section 7 is dropped; iPhone snore events remain a standalone summary. Raw piezo capture continues only for the staging research objective (breathing irregularity sits well below 16 Hz).
 
 Acceptance: committed aggregate report (spectra summaries, not raw samples) with the pass bar written before the session; raw dumps stay under ignored data/.
 
@@ -186,7 +186,7 @@ Acceptance: training/inference parity, bounded resource use, missing-input behav
 
 0. Piezo bandwidth gate (section 0) — one night of raw dumps plus the scripted hum and knock session; its outcome can cut later steps.
 1. Contract, knock clock sync, storage budget, iPhone/pod capture, control nights and the iPhone calibration session.
-2. Synchronized comparison dashboard — first usable milestone, finished when the section 4 exit test is run against its pre-committed bar.
+2. Synchronized comparison dashboard — first usable milestone, finished when the section 4 exit test is run against its pre-committed bar, or, if no section 0 band passed, when the workspace meets its acceptance criteria.
 3. Reproducible snoring model experiments, if the exit test passes.
 4. Watch motion capture, only if justified by step 3.
 5. Side-attribution experiments.
