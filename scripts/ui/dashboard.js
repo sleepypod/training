@@ -70,6 +70,10 @@ const glossary = {
     'Epoch & hypnogram',
     'An epoch is a five-minute interval represented by one feature row. A hypnogram is a stepped sleep-stage chart over time, ordered Wake, REM, Light, Deep. Gaps stay empty when readings or labels are unavailable. Watch and pod outputs are sampled at interval midpoints, so these plots do not reproduce finer stage boundaries.',
   ],
+  weeks: [
+    'Weeks / weekly averages',
+    'The Weeks view stacks each night’s stage minutes and groups nights into ISO weeks (Monday to Sunday) by the local noon-to-noon night date. Each night counts only intervals where every displayed source has a stage, so Watch, pod and model minutes share a denominator. Weekly averages use nights with shared data; nights without it are gaps, never zero. These are descriptive, retrospective summaries of already-inspected nights, not a trend test or a prediction for future weeks.',
+  ],
   architecture: [
     'Sleep architecture / sleep cycles',
     'Sleep architecture summarizes time spent in each stage; a hypnogram shows their sequence through the night. These charts help inspect stage changes, but do not identify validated sleep-cycle boundaries or count cycles. For stage-duration comparisons we use only the same intervals available in every displayed source, including Watch. Missing intervals are excluded, never filled as Wake.',
@@ -338,9 +342,10 @@ function score(key) {
 function diff(a, b, key) {
   return a?.[key] != null && b?.[key] != null ? a[key] - b[key] : null;
 }
+const tabs = ['overview', 'nights', 'weeks', 'data', 'log'];
 function showTab(tab, focus = false) {
   activeTab = tab;
-  for (const name of ['overview', 'nights', 'data', 'log']) {
+  for (const name of tabs) {
     $(name).hidden = name !== tab;
     const b = $('tab-' + name);
     b.setAttribute('aria-selected', String(name === tab));
@@ -493,6 +498,7 @@ function render() {
   renderOverview();
   if (!document.activeElement?.closest('#overview-timeline, #nights-timeline'))
     renderTimelines();
+  if (!document.activeElement?.closest('#weeks-view')) renderWeeks();
   if (document.activeElement !== $('drift-night')) renderData();
   renderConfig();
   drawLog();
@@ -1609,6 +1615,397 @@ function architecture(rows, title, prediction) {
   );
   return p;
 }
+// Night groups are the exporter's local noon-to-noon dates (YYYY-MM-DD); weeks
+// are ISO weeks of that date, computed on the calendar date alone.
+function isoWeek(group) {
+  const [y, m, d] = group.split('-').map(Number),
+    date = new Date(Date.UTC(y, m - 1, d)),
+    weekday = (date.getUTCDay() + 6) % 7,
+    thursday = new Date(date.getTime() + (3 - weekday) * 86400000),
+    year = thursday.getUTCFullYear(),
+    week = 1 + Math.floor((thursday - Date.UTC(year, 0, 1)) / 604800000),
+    monday = new Date(date.getTime() - weekday * 86400000);
+  return {
+    key: year + '-W' + String(week).padStart(2, '0'),
+    monday: monday.toISOString().slice(0, 10),
+    weekday,
+  };
+}
+// One entry per night group. Every source shares the same intervals (those
+// where all displayed sources have a stage); a night without any shared
+// interval is a gap, never zero minutes.
+function weeklyNights(sessions, keys) {
+  const groups = new Map();
+  for (const session of sessions) {
+    if (!groups.has(session.group)) groups.set(session.group, []);
+    groups.get(session.group).push(...session.rows);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([group, rows]) => {
+      const common = sharedEpochs(rows, keys),
+        minutes = Object.fromEntries(
+          keys.map((key) => [
+            key,
+            stages.map((_, i) =>
+              common
+                .filter((r) => r[key] === i)
+                .reduce((a, r) => a + (r.end - r.start) / 60, 0),
+            ),
+          ]),
+        );
+      return {
+        group,
+        week: isoWeek(group),
+        epochs: common.length,
+        gap: !common.length,
+        minutes: common.length ? minutes : null,
+      };
+    });
+}
+// Weekly averages over nights with shared data only; Δ is source minus Watch.
+function weeklySummary(nights, keys) {
+  const weeks = new Map();
+  for (const night of nights) {
+    if (!weeks.has(night.week.key))
+      weeks.set(night.week.key, { week: night.week, nights: [] });
+    weeks.get(night.week.key).nights.push(night);
+  }
+  return [...weeks.values()].map(({ week, nights: all }) => {
+    const data = all.filter((night) => !night.gap),
+      average = Object.fromEntries(
+        keys.map((key) => [
+          key,
+          data.length
+            ? stages.map(
+                (_, i) =>
+                  data.reduce((a, night) => a + night.minutes[key][i], 0) /
+                  data.length,
+              )
+            : null,
+        ]),
+      );
+    return {
+      week,
+      nightsRecorded: all.length,
+      nightsWithData: data.length,
+      average,
+      versusWatch: Object.fromEntries(
+        keys
+          .filter((key) => key !== 'watch')
+          .map((key) => [
+            key,
+            average[key] && average.watch
+              ? average[key].map((v, i) => v - average.watch[i])
+              : null,
+          ]),
+      ),
+    };
+  });
+}
+let weekSource = 'watch';
+function renderWeeks() {
+  const host = $('weeks-view');
+  host.replaceChildren();
+  const sessions = doc.timelines?.sessions || [],
+    p = panel('Weeks · stage minutes per night', 'weeks');
+  host.append(p);
+  if (!sessions.length) {
+    p.append(
+      empty(
+        doc.report
+          ? 'Sleep timelines were not recorded in this historical run.'
+          : 'Weekly views appear after feature extraction.',
+      ),
+    );
+    return;
+  }
+  const sources = [
+      ['watch', 'Apple Watch · reference'],
+      [
+        'pod',
+        doc.timelines.podSource === 'pod-api'
+          ? 'Pod · captured'
+          : 'Pod · rules replay',
+      ],
+      [mode, 'Candidate · ' + (mode === 'final' ? 'in-sample' : 'held out')],
+      ['baseline', 'Baseline · held out'],
+    ],
+    rows = sessions.flatMap((s) => s.rows),
+    available = sources.filter(([key]) => rows.some((r) => r[key] != null)),
+    keys = available.map(([key]) => key),
+    label = Object.fromEntries(available);
+  if (!keys.includes('watch') || keys.length < 2) {
+    p.append(empty('Waiting for paired stage predictions.'));
+    return;
+  }
+  if (!keys.includes(weekSource)) weekSource = 'watch';
+  const controls = n('div', null, 'timeline-controls'),
+    sl = n('label', 'Show '),
+    ss = n('select');
+  ss.setAttribute('aria-label', 'Weekly chart source');
+  setOptions(
+    ss,
+    available.map(([key, name]) => [key, name]),
+    weekSource,
+  );
+  ss.onchange = () => {
+    weekSource = ss.value;
+    renderWeeks();
+  };
+  sl.append(ss);
+  const ml = n('label', 'Predictions '),
+    ms = n('select');
+  ms.setAttribute('aria-label', 'Weekly prediction mode');
+  setOptions(
+    ms,
+    [
+      ['heldOut', 'Held-out · validation'],
+      ['final', 'Final fit · in-sample'],
+    ],
+    mode,
+  );
+  ms.onchange = () => {
+    mode = ms.value;
+    renderWeeks();
+    renderTimelines();
+  };
+  ml.append(ms, help('final'));
+  controls.append(sl, ml);
+  p.append(controls);
+  if (mode === 'final')
+    p.append(
+      n(
+        'p',
+        'Final-model predictions are fitted on these nights. Baseline remains held out; this is not a like-for-like validation comparison.',
+        'notice',
+      ),
+    );
+  const legendRow = n('div', null, 'legend');
+  order.forEach((i) => {
+    const s = n('span'),
+      dot = n('i');
+    s.append(term('stages', stages[i]));
+    dot.style.background = colors[i];
+    s.prepend(dot);
+    legendRow.append(s);
+  });
+  const gapKey = n('span', 'No shared data'),
+    gapDot = n('i', null, 'week-gap-key');
+  gapKey.prepend(gapDot);
+  legendRow.append(gapKey);
+  p.append(legendRow);
+  const nights = weeklyNights(sessions, keys),
+    summary = weeklySummary(nights, keys),
+    byWeek = new Map(summary.map((w) => [w.week.key, []]));
+  nights.forEach((night) => byWeek.get(night.week.key).push(night));
+  const hours = Math.ceil(
+      Math.max(
+        60,
+        ...nights
+          .filter((night) => !night.gap)
+          .map((night) => night.minutes[weekSource].reduce((a, b) => a + b, 0)),
+      ) / 60,
+    ),
+    tickHours = hours > 8 ? 2 : 1,
+    tallest = Math.ceil(hours / tickHours) * tickHours * 60,
+    slot = 22,
+    weekWidth = slot * 7 + 26,
+    left = 44,
+    top = 18,
+    plot = 190,
+    width = left + summary.length * weekWidth,
+    svg = svgEl('svg', {
+      viewBox: `0 0 ${width} ${top + plot + 48}`,
+      width: Math.round(width * 1.6),
+      height: Math.round((top + plot + 48) * 1.6),
+      class: 'weeks-chart',
+      role: 'img',
+      'aria-label':
+        'Stage minutes per night for ' +
+        label[weekSource] +
+        ', grouped by week',
+    });
+  for (let k = 0; k <= tallest / 60 / tickHours; k++) {
+    const value = k * tickHours * 60,
+      y = top + plot - (value / tallest) * plot;
+    svg.append(
+      svgEl('line', {
+        x1: left - 4,
+        x2: width,
+        y1: y,
+        y2: y,
+        stroke: '#25271f',
+        'stroke-width': 0.6,
+      }),
+      svgEl(
+        'text',
+        {
+          x: left - 8,
+          y: y + 3,
+          fill: '#96988b',
+          'font-size': 9,
+          'text-anchor': 'end',
+        },
+        Math.round(value / 60) + 'h',
+      ),
+    );
+  }
+  summary.forEach((week, w) => {
+    const x0 = left + w * weekWidth;
+    svg.append(
+      svgEl(
+        'text',
+        { x: x0, y: top + plot + 30, fill: '#e7e8df', 'font-size': 10 },
+        week.week.key,
+      ),
+      svgEl(
+        'text',
+        { x: x0, y: top + plot + 42, fill: '#96988b', 'font-size': 9 },
+        'from ' + week.week.monday,
+      ),
+    );
+    const nightsByDay = new Map(
+      byWeek.get(week.week.key).map((night) => [night.week.weekday, night]),
+    );
+    for (let day = 0; day < 7; day++) {
+      const x = x0 + day * slot,
+        night = nightsByDay.get(day);
+      svg.append(
+        svgEl(
+          'text',
+          {
+            x: x + (slot - 4) / 2,
+            y: top + plot + 14,
+            fill: '#96988b',
+            'font-size': 8,
+            'text-anchor': 'middle',
+          },
+          'MTWTFSS'[day],
+        ),
+      );
+      if (!night) continue;
+      if (night.gap) {
+        const r = svgEl('rect', {
+          x,
+          y: top + plot - 24,
+          width: slot - 4,
+          height: 24,
+          fill: 'none',
+          stroke: '#96988b',
+          'stroke-dasharray': '3 2',
+          rx: 2,
+        });
+        r.append(
+          svgEl(
+            'title',
+            {},
+            night.group + ': no interval shared by every displayed source',
+          ),
+        );
+        svg.append(r);
+        continue;
+      }
+      let y = top + plot;
+      for (const i of [...order].reverse()) {
+        const minutes = night.minutes[weekSource][i],
+          h = (minutes / tallest) * plot;
+        if (!h) continue;
+        y -= h;
+        const r = svgEl('rect', {
+          x,
+          y,
+          width: slot - 4,
+          height: Math.max(h - 1, 0.5),
+          rx: 1,
+          fill: colors[i],
+        });
+        r.append(
+          svgEl(
+            'title',
+            {},
+            `${night.group} · ${label[weekSource]}\n${order.map((s) => stages[s] + ' ' + night.minutes[weekSource][s].toFixed(0) + ' min').join(' · ')}\n${night.epochs} shared epochs`,
+          ),
+        );
+        svg.append(r);
+      }
+    }
+  });
+  const scroll = n('div', null, 'timeline-scroll');
+  scroll.append(svg);
+  p.append(scroll);
+  const columns = [
+      'Week',
+      'Nights with data',
+      'Source',
+      ...order.map((i) => stages[i] + ' (avg min)'),
+    ],
+    body = [];
+  for (const week of summary)
+    for (const [key, name] of available) {
+      const avg = week.average[key];
+      body.push([
+        week.week.key,
+        week.nightsWithData + ' of ' + week.nightsRecorded,
+        name,
+        ...order.map((i) => {
+          if (!avg) return '—';
+          const e = n('span', avg[i].toFixed(1)),
+            d = week.versusWatch[key]?.[i];
+          if (d != null)
+            e.append(
+              n(
+                'small',
+                ' (' + (d >= 0 ? '+' : '') + d.toFixed(1) + ')',
+                Math.abs(d) > week.average.watch[i] * 0.15
+                  ? 'architecture-warning'
+                  : 'muted',
+              ),
+            );
+          return e;
+        }),
+      ]);
+    }
+  const wrap = n('div', null, 'table-scroll'),
+    t = n('table');
+  t.setAttribute('aria-label', 'Weekly average stage minutes');
+  table(t, columns, body);
+  wrap.append(t);
+  const exact = n('details'),
+    nightsWrap = n('div', null, 'table-scroll'),
+    nt = n('table');
+  nt.setAttribute('aria-label', 'Stage minutes per night');
+  table(
+    nt,
+    [
+      'Night',
+      'Week',
+      'Shared epochs',
+      ...available.map(([, name]) => name.split(' · ')[0] + ' W/R/L/D'),
+    ],
+    nights.map((night) => [
+      night.group,
+      night.week.key,
+      night.gap ? 'None (gap)' : String(night.epochs),
+      ...keys.map((key) =>
+        night.gap
+          ? '—'
+          : order.map((i) => night.minutes[key][i].toFixed(0)).join(' / '),
+      ),
+    ]),
+  );
+  nightsWrap.append(nt);
+  exact.append(n('summary', 'Minutes per night'), nightsWrap);
+  p.append(
+    wrap,
+    exact,
+    n(
+      'p',
+      `Nights are local noon-to-noon groups (${doc.timelines.timeZone}); weeks are ISO weeks starting Monday. Each night counts only intervals where every displayed source has a stage, so sources share a denominator. Averages use nights with shared data; days without a recording are blank and nights without shared data are dashed, never counted as zero. Δ is minutes versus Watch; amber marks a difference above 15% (a visual cue, not a release criterion).`,
+      'footnote',
+    ),
+  );
+}
 function renderData() {
   const d = doc.diagnostics,
     s = doc.state || {},
@@ -1946,16 +2343,16 @@ $('help-dialog').addEventListener('click', (e) => {
 document.querySelectorAll('[data-tab]').forEach((b, i) => {
   b.onclick = () => showTab(b.dataset.tab);
   b.onkeydown = (e) => {
-    const list = ['overview', 'nights', 'data', 'log'];
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
       e.preventDefault();
       showTab(
-        list[
+        tabs[
           e.key === 'Home'
             ? 0
             : e.key === 'End'
-              ? 3
-              : (i + (e.key === 'ArrowRight' ? 1 : 3)) % 4
+              ? tabs.length - 1
+              : (i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) %
+                tabs.length
         ],
         true,
       );

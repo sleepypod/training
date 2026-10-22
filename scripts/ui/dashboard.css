@@ -1026,3 +1026,12 @@ summary {
 #importance .barrow {
   grid-template-columns: 120px 1fr 110px;
 }
+
+.weeks-chart {
+  width: auto;
+  max-width: none;
+}
+.legend .week-gap-key {
+  background: transparent;
+  border: 1px dashed var(--muted);
+}

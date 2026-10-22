@@ -13,7 +13,8 @@
     <a class="skip" href="#content">Skip to results</a>
     <aside id="sidebar">
       <div class="brand">
-        <img class="brand-mark" src="__LOGO__" width="28" height="28" alt="" /> sleepypod
+        <img class="brand-mark" src="__LOGO__" width="28" height="28" alt="" />
+        sleepypod
         <span class="muted">/ research</span>
       </div>
       <div class="section-label">
@@ -119,6 +120,15 @@
             tabindex="-1"
           >
             Nights</button
+          ><button
+            id="tab-weeks"
+            role="tab"
+            aria-selected="false"
+            aria-controls="weeks"
+            data-tab="weeks"
+            tabindex="-1"
+          >
+            Weeks</button
           ><button
             id="tab-data"
             role="tab"
@@ -342,6 +352,9 @@
           hidden
         >
           <div id="nights-timeline"></div>
+        </section>
+        <section id="weeks" role="tabpanel" aria-labelledby="tab-weeks" hidden>
+          <div id="weeks-view"></div>
         </section>
         <section id="data" role="tabpanel" aria-labelledby="tab-data" hidden>
           <div id="intake" class="scorecards panel"></div>
