@@ -1617,6 +1617,16 @@ function architecture(rows, title, prediction) {
 }
 // Night groups are the exporter's local noon-to-noon dates (YYYY-MM-DD); weeks
 // are ISO weeks of that date, computed on the calendar date alone.
+function isNightDate(group) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(group ?? '')) return false;
+  const [y, m, d] = group.split('-').map(Number),
+    date = new Date(Date.UTC(y, m - 1, d));
+  return (
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === m - 1 &&
+    date.getUTCDate() === d
+  );
+}
 function isoWeek(group) {
   const [y, m, d] = group.split('-').map(Number),
     date = new Date(Date.UTC(y, m - 1, d)),
@@ -1638,7 +1648,7 @@ function weeklyNights(sessions, keys) {
   const groups = new Map();
   for (const session of sessions) {
     // Older saved runs can lack a night group; they cannot be placed in a week.
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(session.group ?? '')) continue;
+    if (!isNightDate(session.group)) continue;
     if (!groups.has(session.group)) groups.set(session.group, []);
     groups.get(session.group).push(...session.rows);
   }

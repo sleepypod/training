@@ -119,6 +119,8 @@ test('weekly nights merge sessions of one night and share a denominator', () => 
       { group: '2026-10-20', rows: [row(5000, 1, 2, 1, null)] },
       { rows: [row(9000, 1, 1, 1, 1)] },
       { group: 'night-3', rows: [row(9300, 1, 1, 1, 1)] },
+      { group: '2024-02-31', rows: [row(9600, 1, 1, 1, 1)] },
+      { group: '2026-13-01', rows: [row(9900, 1, 1, 1, 1)] },
     ],
     keys,
   );
