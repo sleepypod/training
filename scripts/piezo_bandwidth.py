@@ -14,6 +14,7 @@ import hashlib
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -69,6 +70,17 @@ def pod_clock_offset_ms(pod):
     if not header:
         return None
     return round(parsedate_to_datetime(header).timestamp() * 1000) - (before + after) // 2
+
+
+def optional_offset(pod):
+    """The coarse clock check must never cost a recorded session."""
+    if not pod:
+        return None
+    try:
+        return pod_clock_offset_ms(pod)
+    except (OSError, ValueError, TypeError) as error:
+        print(f'Pod clock check skipped: {error}', flush=True)
+        return None
 
 
 def fetch_export(pod, start_s, end_s, out):
@@ -176,7 +188,7 @@ def analyze_steps(recs, steps, side):
             stats = {'samples': int(sum(map(len, segs))), 'expectedSamples': (end_s - start_s) * FS,
                      'interpolatedSamples': interpolated, 'droppedSamples': dropped, 'welchWindows': windows}
             if windows:
-                spectra[(step['name'], channel)] = (freqs, p, segs)
+                spectra[(step['name'], channel)] = (freqs, p, [g for g in segs if len(g) >= NPERSEG])
                 stats['bandDb'] = {k: band_db(freqs, p, b) for k, b in {**BANDS, **CONTEXT_BANDS}.items()}
                 stats['floorSlopeDbPerDecade'] = floor_slope(freqs, p)
                 stats['psdDb'] = {str(f): float(10 * np.log10(p[np.argmin(np.abs(freqs - f))]))
@@ -291,7 +303,7 @@ def cmd_session(args):
     out = Path(args.out)
     if out.exists():
         raise SystemExit(f'{out} exists; choose a new path')
-    offset = pod_clock_offset_ms(args.pod) if args.pod else None
+    offset = optional_offset(args.pod)
     print(f'Side: {args.side}. {len(STEPS)} steps × {args.step_seconds} s. Press Enter to start each step.')
     if offset is not None:
         print(f'Pod clock offset ≈ {offset / 1000:+.1f} s (HTTP Date, 1 s resolution).')
@@ -306,7 +318,7 @@ def cmd_session(args):
         steps.append({'name': name, 'instruction': instruction, 'startMs': start, 'endMs': now_ms()})
         print(f'\r\a  Done: {name}.                         ')
     doc = {'version': 'piezo-bandwidth-session-v1', 'side': args.side, 'stepSeconds': args.step_seconds,
-           'podClockOffsetMs': {'start': offset, 'end': pod_clock_offset_ms(args.pod) if args.pod else None},
+           'podClockOffsetMs': {'start': offset, 'end': optional_offset(args.pod)},
            'recordedAt': datetime.now(timezone.utc).isoformat(), 'steps': steps}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(doc, indent=2))

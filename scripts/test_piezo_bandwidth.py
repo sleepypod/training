@@ -142,6 +142,13 @@ class RawPiezoTests(unittest.TestCase):
             self.assertIsNone(rec)
             self.assertIn(message, error)
 
+    def test_truncated_inner_records_are_reported_not_fatal(self):
+        full = cbor({'type': 'x', 'v': 2.5, 's': 'abcdef', 'n': 2 ** 40})
+        for cut in range(1, len(full)):
+            got = list(rp.records(outer(1, full[:cut])))
+            self.assertTrue(all(rec is None and 'Truncated' in error for rec, error in got), (cut, got))
+            self.assertTrue(got, cut)
+
     def test_outer_record_contract_violations(self):
         good = outer(1, cbor({'type': 'x'}))
         for raw, message in ((b'\xa2\x63seq\x41', 'unsigned'), (good[:10] + b'\x64date' + good[15:], 'data key'),
@@ -171,6 +178,18 @@ class BandwidthGateTests(unittest.TestCase):
         self.assertGreater(report['bands']['16-30Hz']['bestRiseDb'], 20)
         self.assertEqual(report['steps']['empty_pump_on']['pump']['maxRpm'], 2400)
         self.assertEqual(report['knockEvents']['knock_head'], {'left1': 3, 'right1': 3})
+
+    def test_short_fragments_between_dropouts_do_not_crash_knock_analysis(self):
+        recs, steps = synthetic_session()
+        for rec in recs:
+            if rec.get('type') == 'piezo-dual' and rec['ts'] % 10 == 0:
+                for channel in ('left1', 'right1'):
+                    values = np.frombuffer(rec[channel], '<i4').copy()
+                    values[100:110] = values[120:130] = rp.LOST_SAMPLE
+                    rec[channel] = values.tobytes()
+        report = pb.analyze_steps(recs, steps, 'left')
+        self.assertEqual(report['outcome'], 'both-bands')
+        self.assertGreater(report['steps']['knock_head']['channels']['left1']['droppedSamples'], 0)
 
     def test_missing_high_band_reports_low_band_only(self):
         report = pb.analyze_steps(*synthetic_session(high=False), 'left')
@@ -296,6 +315,19 @@ class CommandTests(unittest.TestCase):
         self.assertTrue(all(s['endMs'] - s['startMs'] >= 60_000 for s in doc['steps']))
         self.assertIsNotNone(doc['podClockOffsetMs']['start'])
         self.assertIn('Saved', text)
+
+    def test_failed_clock_check_never_discards_a_recorded_session(self):
+        clock = iter(range(0, 10_000_000, 30_000))
+        with tempfile.TemporaryDirectory() as d, patch('builtins.input', return_value=''), patch.object(pb.time, 'sleep'), \
+                patch.object(pb, 'now_ms', side_effect=lambda: next(clock)), \
+                patch.object(pb, 'pod_clock_offset_ms', side_effect=pb.urllib.error.URLError('down')):
+            path = Path(d) / 'steps.json'
+            text = self.run_main('session', '--side', 'right', '--pod', '127.0.0.1', '--out', str(path))
+            doc = json.loads(path.read_text())
+        self.assertEqual(doc['podClockOffsetMs'], {'start': None, 'end': None})
+        self.assertEqual(len(doc['steps']), len(pb.STEPS))
+        self.assertIn('clock check skipped', text)
+        self.assertIsNone(pb.optional_offset(None))
 
     def test_analyze_fetches_from_pod_and_reanalyses_a_saved_export(self):
         recs, steps = synthetic_session()

@@ -65,7 +65,9 @@ class _Inner:
 
     def read(self, size):
         chunk = self.payload[self.position:self.position + size]
-        self.position += len(chunk)
+        if len(chunk) < size:
+            raise ValueError('Truncated inner record')
+        self.position += size
         return chunk
 
     def peek_break(self):
@@ -80,8 +82,6 @@ class _Inner:
         if depth > 16:
             raise ValueError('CBOR nesting too deep')
         head = self.read(1)
-        if not head:
-            raise ValueError('Truncated inner record')
         major, additional = head[0] >> 5, head[0] & 31
         if major in (0, 1):
             n = _argument(self.read, additional)
