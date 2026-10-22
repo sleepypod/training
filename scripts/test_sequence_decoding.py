@@ -83,6 +83,31 @@ class SequenceDecodingTests(unittest.TestCase):
         proba = m.probabilities(Model(), session([1, None]))
         np.testing.assert_allclose(proba, [[0, .4, 0, .6]] * 2)
 
+    def test_emissions_are_not_divided_by_the_label_prior(self):
+        class Model:
+            classes_ = np.array([0, 1, 2, 3])
+            def predict_proba(self, xs):
+                return np.tile([.05, .5, .05, .4], (len(xs), 1))
+        # Dividing by this light-heavy prior would flip every epoch to REM.
+        train = [session([1] * 40 + [3] * 2)]
+        path = m.decode('viterbi', Model(), session([None] * 3), None, {'alpha': 1, 'weight': 32.0}, train)
+        self.assertEqual(path, [1, 1, 1])
+        self.assertNotIn('beta', m.GRID[0])
+        self.assertEqual(max(p['weight'] for p in m.GRID), 32.0)
+
+    def test_main_rejects_too_few_groups_and_reused_output(self):
+        nights = [{**session([1, 2], start=g * 100_000), 'group': f'g{g}'} for g in range(6)]
+        with tempfile.TemporaryDirectory() as root:
+            features = Path(root) / 'features.json'
+            features.write_text(json.dumps({'nights': nights[:4], 'ruleset': {}, 'sources': {}}))
+            with patch('sys.argv', ['x', str(features), '--out', str(Path(root) / 'a')]), self.assertRaisesRegex(ValueError, 'five'):
+                m.main()
+            features.write_text(json.dumps({'nights': nights, 'ruleset': {}, 'sources': {}}))
+            (Path(root) / 'b').mkdir()
+            (Path(root) / 'b/old').write_text('x')
+            with patch('sys.argv', ['x', str(features), '--out', str(Path(root) / 'b')]), self.assertRaisesRegex(ValueError, 'empty output'):
+                m.main()
+
 
 if __name__ == '__main__':
     unittest.main()

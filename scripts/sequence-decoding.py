@@ -26,8 +26,8 @@ MODELS = ('existing_depth8', 'balanced_leaf10')
 DECODERS = ('production', 'argmax', 'viterbi', 'viterbi_no_deep_rem')
 DEEP, REM = pm.STAGES.index('deep'), pm.STAGES.index('rem')
 EPSILON = 1e-6
-# Frozen before evaluation; chosen per outer fold by inner GroupKFold only.
-GRID = [dict(alpha=a, weight=w, beta=b) for a, w, b in itertools.product((0.5, 2.0), (0.5, 1.0, 2.0), (0.0, 1.0))]
+# Frozen before evaluation; chosen per outer fold by inner GroupKFold only. Large weights approach argmax.
+GRID = [dict(alpha=a, weight=w) for a, w in itertools.product((0.5, 2.0), (0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0))]
 
 
 def transitions(nights, alpha, forbid_deep_rem=False):
@@ -83,10 +83,12 @@ def decode(name, clf, night, ruleset, params, train):
     proba = probabilities(clf, night)
     if name == 'argmax':
         return [int(c) for c in proba.argmax(axis=1)]
-    p = prior(train, params['alpha'])
-    emissions = params['weight'] * (np.log(proba + EPSILON) - params['beta'] * np.log(p))
+    # Both forests are fitted on class-balanced data (oversampling or balanced weights), so
+    # proba is already a likelihood up to a constant; dividing by the label prior would
+    # rebalance a second time. The label prior is used only for the first epoch.
+    emissions = params['weight'] * np.log(proba + EPSILON)
     matrix = transitions(train, params['alpha'], forbid_deep_rem=name == 'viterbi_no_deep_rem')
-    return viterbi(emissions, np.log(matrix), np.log(p))
+    return viterbi(emissions, np.log(matrix), np.log(prior(train, params['alpha'])))
 
 
 def score(name, clf, nights, ruleset, params, train):
@@ -154,7 +156,8 @@ def main():
         models=list(MODELS), decoders=list(DECODERS), grid=GRID, outer='leave-one-night-group-out',
         inner='3-fold GroupKFold for decoder hyperparameters only', objective='macro F1 across all four classes, then kappa',
         selection='none: fixed forest configurations; this is a decoder ablation, not candidate selection',
-        gaps='decoded in row order across gaps, as production postprocessing does; transitions counted only between consecutive labeled epochs',
+        gaps='decoded in row order across gaps with one transition step, as production postprocessing does; transitions counted only between consecutive labeled epochs',
+        emissions='weight × log predict_proba; no prior division because both forests train on class-balanced data',
         prospective=False, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
     outputs = {(m, d): ([], []) for m in MODELS for d in DECODERS}
@@ -189,7 +192,10 @@ def main():
         results[f'{model}/{decoder}'] = dict(**result, cells=cells(result['confusion']), directDeepRemTransitions=jumps[model, decoder],
             versusProduction={'meanNightMacroF1Difference': float(differences.mean()),
                 'nightBootstrap95Percent': np.quantile(means, [.025, .975]).tolist()})
-    report = dict(protocol=protocol, groups=len(groups), sessions=len(nights), folds=folds, scores=results,
+    chosen = {key: {json.dumps(p, sort_keys=True): sum(1 for f in folds if f['params'][key] == p)
+                    for p in GRID if any(f['params'][key] == p for f in folds)}
+              for key in folds[0]['params'] if folds[0]['params'][key] is not None}
+    report = dict(protocol=protocol, groups=len(groups), sessions=len(nights), folds=folds, scores=results, selectedParams=chosen,
         limitations=['Same-person retrospective reuse of already-inspected nights; not prospective.',
             'Watch labels are the reference, not polysomnography.',
             'Night bootstrap intervals are descriptive: overlapping training sets make them approximate.',

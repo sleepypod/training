@@ -3,7 +3,7 @@
 ## 2026-10-21
 
 - **Update**: Captured [light-sleep confusion](evaluation/light-sleep-confusion-2026-10-21.md): held-out confusion, feature separation, Watch transition structure and ranked experiments. Linked from [research priorities](operations/research-priorities.md) and the overnight capture plan. No model activation.
-- **Creation**: Captured [sequence decoding](evaluation/sequence-decoding-2026-10-21.md): HMM/Viterbi decoder ablation on fixed forests; no improvement over production smoothing. No model activation.
+- **Creation**: Captured [sequence decoding](evaluation/sequence-decoding-2026-10-21.md): HMM/Viterbi decoder ablation on fixed forests; dropping isolated-epoch smoothing gained about 0.02 macro F1, Viterbi a similar amount on the balanced forest, all weak evidence. No model activation.
 
 ## 2026-10-20
 
