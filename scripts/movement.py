@@ -29,6 +29,7 @@ from sklearn.model_selection import GroupKFold
 import piezo_bandwidth as pb
 import raw_piezo as rp
 from fetch_pod import base_url
+from run_history import register_output
 
 FS = 500
 CLASSES = ('still', 'arm', 'leg', 'turn', 'sit')
@@ -255,6 +256,8 @@ def evaluate(rows, folds=5, seed=42):
         clf = RandomForestClassifier(n_estimators=300, min_samples_leaf=2, class_weight='balanced', random_state=seed, n_jobs=1)
         clf.fit(x[train], labels[train])
         predicted[test] = clf.predict(x[test])
+    for row, label, moving in zip(usable, predicted, baseline_moving):
+        row['predicted'], row['baselineMoving'] = str(label), bool(moving)  # out-of-fold, for timelines
     truth_moving = labels != 'still'
     present = [c for c in CLASSES if (labels == c).any()]
     cm = confusion_matrix(labels, predicted.astype(str), labels=present)
@@ -336,6 +339,7 @@ def cmd_train(args):
                                'With one session, folds share a person, night and setup; results are optimistic.'])
     (out / 'report.json').write_text(json.dumps(report, indent=2))
     (out / 'windows.json').write_text(json.dumps(rows))
+    register_output(out)
     for line in summary_lines(report):
         print(line)
     print(f'Report: {out / "report.json"}')

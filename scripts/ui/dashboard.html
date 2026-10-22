@@ -17,9 +17,20 @@
         sleepypod
         <span class="muted">/ research</span>
       </div>
-      <div class="section-label">
-        TRAINING RUNS <span id="run-count"></span>
+      <div
+        id="task-switch"
+        class="task-switch"
+        role="group"
+        aria-label="Research task"
+      >
+        <button data-task="sleep" aria-pressed="true">Sleep</button
+        ><button data-task="movement" aria-pressed="false">Movement</button
+        ><button data-task="snore" aria-pressed="false">Snore</button
+        ><button class="help" data-help="tasks" aria-label="Explain tasks">
+          ?
+        </button>
       </div>
+      <div class="section-label">RUNS <span id="run-count"></span></div>
       <label class="sr-only" for="run-search">Search runs</label
       ><input id="run-search" type="search" placeholder="Search runs…" /><label
         class="sr-only"
@@ -42,7 +53,9 @@
       <header class="run-header">
         <div class="header-top">
           <div>
-            <div class="section-label">SLEEP STAGE EXPERIMENT</div>
+            <div id="experiment-label" class="section-label">
+              SLEEP STAGE EXPERIMENT
+            </div>
             <h1 id="run-title">Training workspace</h1>
           </div>
           <span id="status" class="badge">Loading</span>
@@ -67,8 +80,10 @@
           Select a run to explore its progress and results.
         </p>
         <div class="header-metrics">
-          <div><span>Elapsed</span><strong id="elapsed">—</strong></div>
-          <div>
+          <div class="sleep-only">
+            <span>Elapsed</span><strong id="elapsed">—</strong>
+          </div>
+          <div class="sleep-only">
             <span
               >Fit ETA
               <button class="help" data-help="eta" aria-label="Explain fit ETA">
@@ -76,7 +91,7 @@
               </button></span
             ><strong id="eta">—</strong>
           </div>
-          <div>
+          <div class="sleep-only">
             <span
               >Macro F1
               <button
@@ -95,14 +110,14 @@
         </div>
         <div
           id="pipeline"
-          class="pipeline"
+          class="pipeline sleep-only"
           aria-label="Training pipeline"
         ></div>
         <div class="status-detail">
           <span id="detail" aria-live="polite"></span
           ><span id="connection" role="status"></span>
         </div>
-        <nav class="tabs" role="tablist" aria-label="Run views">
+        <nav class="tabs sleep-only" role="tablist" aria-label="Run views">
           <button
             id="tab-overview"
             role="tab"
@@ -468,9 +483,10 @@
             >
           </div>
         </section>
+        <section id="task-view" class="task-view-panels" hidden></section>
         <footer>
-          Local research · scikit-learn / NumPy / SciPy · Retrospective sleep
-          staging · No model activation
+          Local research · scikit-learn / NumPy / SciPy · Retrospective analysis
+          · No model activation
         </footer>
       </main>
     </div>

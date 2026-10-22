@@ -9,7 +9,7 @@ from threading import Thread
 import time
 from urllib.parse import urlsplit
 
-from run_history import Catalog, local_data_roots, read_json
+from run_history import Catalog, local_data_roots, read_json, run_kind
 
 UI = Path(__file__).with_name('ui')
 
@@ -21,8 +21,57 @@ def _diagnostics(path, modified, size):
     return describe(data) if data else None
 
 
-def payload(output, key=None):
+MOVEMENT_WINDOW_FIELDS = ('session', 't', 'label', 'predicted', 'baselineMoving', 'baseline')
+
+
+def pod_host(report):
+    """host:port of the pod a snore report came from, if recorded."""
+    for value in (report.get('pod'), (report.get('source') or {}).get('url')):
+        if value:
+            parts = urlsplit(value if '://' in value else 'http://' + value)
+            if parts.hostname:
+                return f'{parts.hostname}:{parts.port or 3000}'
+    return None
+
+
+def snore_reference(report, catalog):
+    """Lying-still and imitated-snore levels from the latest snore session on the same pod, if any."""
+    host = pod_host(report)
+    if not host or catalog is None:
+        return None
+    best = None
+    for entry in catalog.list():
+        if entry.get('kind') != 'snore-session':
+            continue
+        root = catalog.resolve(entry['id'])
+        session = read_json(root / 'report.json', {}) if root else {}
+        if pod_host(session) != host or not session.get('occupantChannels'):
+            continue
+        channel = session['occupantChannels'][0]
+        steps = session.get('steps', {})
+        still = steps.get('occupied_still', {}).get('channels', {}).get(channel, {}).get('bandDb')
+        snore = steps.get('occupied_snore', {}).get('channels', {}).get(channel, {}).get('bandDb')
+        if still and snore and (best is None or entry['startedAt'] > best['startedAt']):
+            best = {'run': entry['name'], 'id': entry['id'], 'channel': channel, 'still': still, 'snore': snore,
+                    'outcome': session.get('outcome'), 'startedAt': entry['startedAt']}
+    return best
+
+
+def task_payload(root, key, kind, catalog=None):
+    report = read_json(root / 'report.json', {})
+    windows = read_json(root / 'windows.json')
+    if kind == 'movement' and windows:
+        windows = [{k: w.get(k) for k in MOVEMENT_WINDOW_FIELDS} for w in windows]
+    return {'id': key, 'name': root.name, 'kind': kind, 'state': {'status': 'complete'},
+            'config': read_json(root / 'run.json', {}), 'taskReport': report, 'windows': windows,
+            'reference': snore_reference(report, catalog) if kind == 'snore-night' else None}
+
+
+def payload(output, key=None, catalog=None):
     root = Path(output)
+    kind = run_kind(root)
+    if kind and kind != 'sleep':
+        return task_payload(root, key, kind, catalog)
     features = root / 'features.json'
     diagnostics = None
     if features.is_file():
@@ -43,7 +92,7 @@ def payload(output, key=None):
     return {'id': key, 'name': root.name, 'state': read_json(root / 'progress.json', {}),
             'report': read_json(root / 'model/report.json'), 'timelines': traces,
             'diagnostics': diagnostics, 'config': read_json(root / 'run.json', {}),
-            'protocol': read_json(root / 'model/protocol.json', {}),
+            'protocol': read_json(root / 'model/protocol.json', {}), 'kind': 'sleep',
             'error': (root / 'error.txt').read_text() if (root / 'error.txt').is_file() else None}
 
 
@@ -77,12 +126,12 @@ def serve(output=None, catalog=None, port=0):
                 root = catalog.resolve(parts[3])
                 if root and root.is_dir() and len(parts) in (4, 5):
                     if len(parts) == 4:
-                        doc = payload(root, parts[3])
+                        doc = payload(root, parts[3], catalog)
                         entry = next((r for r in catalog.list() if r['id'] == parts[3]), None)
                         if entry: doc['state']['status'] = entry['status']
                         data = json.dumps(doc, allow_nan=False).encode()
                     elif parts[4] == 'report':
-                        kind = 'text/html'; data = html(payload(root)).encode()
+                        kind = 'text/html'; data = html(payload(root, None, catalog)).encode()
                     elif parts[4] in ('events', 'candidate'):
                         artifact = root / ('events.jsonl' if parts[4] == 'events' else 'model/candidate.json')
                         if artifact.is_file():

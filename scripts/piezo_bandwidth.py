@@ -27,6 +27,7 @@ from scipy.signal import butter, sosfiltfilt, welch
 
 import raw_piezo
 from fetch_pod import base_url
+from run_history import register_output
 
 FS = 500
 NPERSEG = 1000  # 2 s windows, 0.5 Hz resolution
@@ -151,7 +152,12 @@ def psd(segments):
 
 def band_db(freqs, p, band):
     mask = (freqs >= band[0]) & (freqs < band[1])
-    return float(10 * np.log10(np.trapezoid(p[mask], freqs[mask])))
+    with np.errstate(divide='ignore'):  # zero energy is -inf; callers decide whether that is missing
+        return float(10 * np.log10(np.trapezoid(p[mask], freqs[mask])))
+
+
+def finite_or_none(value):
+    return float(value) if np.isfinite(value) else None
 
 
 def floor_slope(freqs, p, lo=100.0, hi=245.0):
@@ -280,11 +286,24 @@ def analyze_steps(recs, steps, side, offset_ms=0):
             'knockEvents': knocks, 'knockPassed': bool(knock_pass), 'outcome': outcome}
 
 
+NIGHT_WINDOW_S = 30
+NIGHT_BANDS = {'16-30Hz': BANDS['16-30Hz'], '60-100Hz': BANDS['60-100Hz'], '1-10Hz': CONTEXT_BANDS['1-10Hz']}
+
+
 def analyze_night(recs, files, start_s, end_s):
+    """Coverage, storage, hourly band-power percentiles and a 30 s band-energy series for one night."""
     seconds, duplicates = raw_piezo.piezo_seconds(recs)
     present = channels_present(seconds)
     in_window = [t for t in seconds if start_s <= t < end_s]
     hours = []
+    pump_by_window = {}
+    for r in recs:
+        ts = r.get('ts')
+        if r.get('type') == 'frzHealth' and isinstance(ts, int) and start_s <= ts < end_s:
+            slot = int(start_s) + (ts - int(start_s)) // NIGHT_WINDOW_S * NIGHT_WINDOW_S
+            rpm = max(r.get(s, {}).get('pump', {}).get('rpm') or 0 for s in ('left', 'right'))
+            pump_by_window[slot] = max(pump_by_window.get(slot, 0), rpm)
+    series = {}
     for hour_start in range(int(start_s), int(end_s), 3600):
         hour_end = min(hour_start + 3600, int(end_s))
         row = {'startS': hour_start, 'piezoSeconds': sum(1 for t in in_window if hour_start <= t < hour_end),
@@ -292,13 +311,19 @@ def analyze_night(recs, files, start_s, end_s):
         for channel in present:
             medians = {k: [] for k in {**BANDS, **CONTEXT_BANDS}}
             lost = 0
-            for window_start in range(hour_start, hour_end, 30):
-                segs, interpolated, dropped = raw_piezo.segments(seconds, channel, window_start, min(window_start + 30, hour_end))
+            for window_start in range(hour_start, hour_end, NIGHT_WINDOW_S):
+                segs, interpolated, dropped = raw_piezo.segments(seconds, channel, window_start, min(window_start + NIGHT_WINDOW_S, hour_end))
                 lost += interpolated + dropped
                 freqs, p, windows = psd(segs)
+                entry = series.setdefault(window_start, {'t': window_start, 'pump': pump_by_window.get(window_start), 'bands': {}})
+                entry['bands'][channel] = {k: None for k in NIGHT_BANDS}
                 if windows:
+                    # A flat run of zero samples has no energy: -inf dB is missing, not a value.
                     for k, b in {**BANDS, **CONTEXT_BANDS}.items():
-                        medians[k].append(band_db(freqs, p, b))
+                        value = band_db(freqs, p, b)
+                        if np.isfinite(value):
+                            medians[k].append(value)
+                    entry['bands'][channel] = {k: finite_or_none(band_db(freqs, p, b)) for k, b in NIGHT_BANDS.items()}
             row['channels'][channel] = {'lostSamples': lost, 'bandDbPercentiles': {
                 k: (np.percentile(v, [10, 50, 90]).tolist() if v else None) for k, v in medians.items()}}
         hours.append(row)
@@ -320,7 +345,8 @@ def analyze_night(recs, files, start_s, end_s):
                         'archivedFiles': len(archived),
                         'piezoSampleBytesPerHour': len(present) * FS * 4 * 3600,
                         'note': 'Export bytes include every RAW record type and any files outside the window.'},
-            'hours': hours}
+            'hours': hours, 'windowSecondsEach': NIGHT_WINDOW_S,
+            'windows': [series[t] for t in sorted(series)]}
 
 
 def summary_lines(report):
@@ -391,11 +417,12 @@ def cmd_analyze(args):
     recs, errors, files = load_export(path)
     offset = (session.get('podClockOffsetMs') or {}).get('start') or 0
     report = analyze_steps(recs, session['steps'], args.side or session['side'], offset)
-    report.update(version='piezo-bandwidth-report-v1', generatedAt=datetime.now(timezone.utc).isoformat(),
+    report.update(version='piezo-bandwidth-report-v1', kind='snore-session', pod=base_url(args.pod) if args.pod else None, generatedAt=datetime.now(timezone.utc).isoformat(),
                   source=source, files=files, decodeErrors=errors,
                   scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   sessionSha256=hashlib.sha256(Path(args.steps).read_bytes()).hexdigest())
     (out / 'report.json').write_text(json.dumps(report, indent=2))
+    register_output(out)
     print('\n'.join(summary_lines(report)))
     print(f'Report: {out / "report.json"}')
 
@@ -417,9 +444,13 @@ def cmd_night(args):
     path, source = obtain_export(args, out, start_s, time.time() + EXPORT_END_SLACK_S)
     recs, errors, files = load_export(path)
     report = analyze_night(recs, files, start_s, end_s)
-    report.update(version='piezo-night-report-v1', generatedAt=datetime.now(timezone.utc).isoformat(),
+    windows = report.pop('windows')
+    report.update(version='piezo-night-report-v1', kind='snore-night', pod=base_url(args.pod) if args.pod else None,
+                  generatedAt=datetime.now(timezone.utc).isoformat(), startS=start_s, endS=end_s,
                   source=source, decodeErrors=errors, scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    (out / 'windows.json').write_text(json.dumps(windows))
     (out / 'report.json').write_text(json.dumps(report, indent=2))
+    register_output(out)
     s = report['storage']
     print(f"Channels {report['channels']} at {report['freq']} Hz · coverage {report['coverage']:.1%} of {report['windowSeconds'] / 3600:.1f} h")
     ratio = 'n/a' if s['archiveGzipRatio'] is None else f"{s['archiveGzipRatio']:.2f}"
