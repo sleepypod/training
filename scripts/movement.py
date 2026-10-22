@@ -38,6 +38,8 @@ EVENT_SECONDS = {'arm': 4.0, 'leg': 4.0, 'turn': 7.0, 'sit': 9.0}
 WINDOW_S, HOP_S = 2.0, 1.0
 REACTION_S = 1.0  # a cue takes about a second to say; movement starts after it
 GUARD_S = 3.0  # still windows must be at least this far from any movement window
+# Finished pod frames reach the export up to about 45 minutes late; an hour past the session covers it.
+ARCHIVE_DELAY_S = 3600
 BANDS = ((0.5, 4), (4, 10), (10, 30), (30, 100), (100, 245))
 SENSING = slice(0, 6)  # capSense2 values 0-5 sense; 6-7 are the reference pair
 
@@ -302,6 +304,8 @@ def load_session_args(values):
 
 
 def cmd_train(args):
+    if not args.pod and not args.movement:
+        raise SystemExit('Pass --pod, or --movement with saved pod movement rows')
     out = pb.prepare_output(args.out)
     rows, sources = [], []
     for path, export in load_session_args(args.session):
@@ -313,7 +317,7 @@ def cmd_train(args):
                 raise SystemExit('Pass --pod, or give each session as path=export.tar.gz')
             export = out / f'{name}.tar.gz'
             print(f'Fetching raw export for {name}…', flush=True)
-            pb.fetch_export(args.pod, start - 60, time.time() + pb.EXPORT_END_SLACK_S, export)
+            pb.fetch_export(args.pod, start - 60, end + ARCHIVE_DELAY_S, export)
         movement = (json.loads(Path(args.movement).read_text()) if args.movement else
                     fetch_movement(args.pod, session['side'], start, end))
         recs, errors, _ = pb.load_export(export)

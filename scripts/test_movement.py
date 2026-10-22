@@ -234,6 +234,8 @@ class CommandTests(unittest.TestCase):
             report = json.loads((Path(d) / 'run/report.json').read_text())
             windows = json.loads((Path(d) / 'run/windows.json').read_text())
         self.assertTrue(any(r.startswith('/api/biometrics/movement?side=left') for r in requests))
+        export_request = next(r for r in requests if r.startswith('/api/export/archive'))
+        self.assertIn(f'endTs={int(mv.session_span(session)[1] + mv.ARCHIVE_DELAY_S)}', export_request)
         self.assertEqual(report['kind'], 'movement')
         self.assertEqual(report['sources'][0]['droppedWindows'], 0)
         self.assertEqual(len(windows), report['windows'])
@@ -250,6 +252,9 @@ class CommandTests(unittest.TestCase):
             self.assertTrue((Path(d) / 'run/report.json').exists())
             with self.assertRaises(SystemExit):
                 self.run_main('train', '--session', str(path), '--movement', str(saved), '--out', str(Path(d) / 'run2'))
+            with self.assertRaisesRegex(SystemExit, '--pod, or --movement'):
+                self.run_main('train', '--session', f'{path}={export}', '--out', str(Path(d) / 'run3'))
+            self.assertFalse((Path(d) / 'run3').exists())
 
     def test_summary_handles_missing_rates(self):
         report = {'windows': 3, 'validation': 'x',
