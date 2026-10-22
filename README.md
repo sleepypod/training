@@ -22,7 +22,8 @@ test data. The displayed scores illustrate the interface, not real-world accurac
 You need a Mac (or Linux machine) on the same network as your pod, an Apple
 Watch that tracks sleep, and about ten minutes.
 
-1. **Install the tools.** With [Homebrew](https://brew.sh): `brew install node@24 git`.
+1. **Install the tools.** With [Homebrew](https://brew.sh): `brew install node@24 git jq`.
+   (`jq` is only needed for the model-upload commands.)
    The quickstart offers to install [uv](https://docs.astral.sh/uv/), which brings its own Python.
 2. **Get this repository:** `git clone https://github.com/sleepypod/training.git && cd training`.
 3. **Find your pod's address.** The sleepypod iOS app shows it under Settings.

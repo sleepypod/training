@@ -85,6 +85,18 @@ class QuickstartTests(unittest.TestCase):
         self.assertTrue(calls[2].startswith(f'uv run --locked python scripts/train.py --pod {pod} --side left --dashboard --out data/runs/'))
         self.assertTrue(calls[2].endswith(f'--watch-export {export}'))
 
+    def test_relative_export_path_resolves_from_the_starting_directory(self):
+        elsewhere = Path(self.tmp.name) / 'downloads'
+        elsewhere.mkdir()
+        (elsewhere / 'export.zip').write_bytes(b'zip')
+        env = {**os.environ, 'PATH': f'{self.bin}:/usr/bin:/bin', 'HOME': self.tmp.name}
+        env.pop('POD', None)
+        with stub_pod() as pod:
+            result = subprocess.run(['bash', str(SCRIPT), '--dry-run', '--pod', pod, '--side', 'left', '--watch-export', 'export.zip'],
+                                    cwd=elsewhere, capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'--watch-export {elsewhere / "export.zip"}', result.stdout)
+
     def test_rejects_wrong_node_major(self):
         self.tool('node', 'echo v22.1.0')
         result = self.run_script('--dry-run', '--pod', '127.0.0.1', '--side', 'left')

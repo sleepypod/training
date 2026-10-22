@@ -9,6 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+START_DIR="$PWD"
 POD="${POD:-}"
 SIDE=""
 EXPORT=""
@@ -84,6 +85,8 @@ if [ -z "$EXPORT" ] && [ "$DRY_RUN" = 0 ]; then
   EXPORT="$(ask 'Path to Apple Health export.zip (Enter to use Watch data already on the pod): ')"
 fi
 EXPORT="${EXPORT/#\~/$HOME}"
+# Relative paths mean relative to where the script was started, not the repository.
+case "$EXPORT" in ''|/*) ;; *) EXPORT="$START_DIR/$EXPORT" ;; esac
 [ -z "$EXPORT" ] || [ -f "$EXPORT" ] || die "no file at $EXPORT"
 
 # 5. Train. A fresh run folder each time; nothing is uploaded or activated.
