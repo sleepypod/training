@@ -86,7 +86,7 @@ class QuickstartTests(unittest.TestCase):
         self.assertTrue(calls[2].endswith(f'--watch-export {export}'))
 
     def test_relative_export_path_resolves_from_the_starting_directory(self):
-        elsewhere = Path(self.tmp.name) / 'downloads'
+        elsewhere = Path(self.tmp.name).resolve() / 'downloads'
         elsewhere.mkdir()
         (elsewhere / 'export.zip').write_bytes(b'zip')
         env = {**os.environ, 'PATH': f'{self.bin}:/usr/bin:/bin', 'HOME': self.tmp.name}
