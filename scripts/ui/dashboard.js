@@ -2511,6 +2511,7 @@ function renderTaskHeader() {
   $('run-title').textContent = doc.config?.name || doc.name || 'Saved run';
   $('status').textContent = 'complete';
   $('status').className = 'badge complete';
+  $('detail').textContent = '';
   const generated = r.generatedAt
       ? new Date(r.generatedAt).toLocaleString()
       : null,
@@ -3176,7 +3177,15 @@ function renderTaskSwitch() {
     b.disabled = offline;
   });
 }
+// Both the task buttons and a #task= link with no matching runs land here.
 function taskEmpty() {
+  tabs.forEach((name) => ($(name).hidden = true));
+  document.body.classList.toggle('task-view', task !== 'sleep');
+  $('experiment-label').textContent = taskTitle[task];
+  $('run-title').textContent = 'Training workspace';
+  $('run-meta').textContent = 'No runs of this kind yet.';
+  $('detail').textContent = '';
+  history.replaceState(null, '', '#task=' + task);
   const host = $('task-view'),
     p = panel(
       task === 'movement'
@@ -3259,12 +3268,6 @@ document.querySelectorAll('[data-task]').forEach((b) => {
     else {
       runId = null;
       doc = null;
-      tabs.forEach((name) => ($(name).hidden = true));
-      document.body.classList.toggle('task-view', task !== 'sleep');
-      $('experiment-label').textContent = taskTitle[task];
-      $('run-title').textContent = 'Training workspace';
-      $('run-meta').textContent = 'No runs of this kind yet.';
-      history.replaceState(null, '', '#task=' + task);
       taskEmpty();
     }
   };

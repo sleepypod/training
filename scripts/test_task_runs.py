@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import patch
 import urllib.request
 
+import numpy as np
+
 import dashboard
 import movement as mv
 import piezo_bandwidth as pb
@@ -160,6 +162,18 @@ class OutputTests(unittest.TestCase):
         report = pb.analyze_night([r for r in recs if r['ts'] < start + 60], [], start, start + 120)
         self.assertIsNone(report['windows'][-1]['bands']['left1']['60-100Hz'])
         self.assertIsNotNone(report['windows'][0]['bands']['left1']['60-100Hz'])
+
+    def test_zero_energy_windows_are_missing_not_minus_infinity(self):
+        recs, steps = synthetic_session()
+        start = steps[0]['startMs'] // 1000
+        flat = [{**r, 'left1': bytes(2000)} if r.get('type') == 'piezo-dual' and r['ts'] < start + 30 else r for r in recs]
+        report = pb.analyze_night(flat, [], start, start + 3600)
+        first = report['windows'][0]['bands']['left1']
+        self.assertEqual(set(first.values()), {None})
+        self.assertIsNotNone(report['windows'][1]['bands']['left1']['60-100Hz'])
+        percentiles = report['hours'][0]['channels']['left1']['bandDbPercentiles']['60-100Hz']
+        self.assertTrue(all(np.isfinite(percentiles)))
+        json.dumps(report, allow_nan=False)
 
     def test_analyze_marks_snore_sessions(self):
         recs, steps = synthetic_session()

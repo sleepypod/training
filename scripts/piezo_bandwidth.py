@@ -152,7 +152,12 @@ def psd(segments):
 
 def band_db(freqs, p, band):
     mask = (freqs >= band[0]) & (freqs < band[1])
-    return float(10 * np.log10(np.trapezoid(p[mask], freqs[mask])))
+    with np.errstate(divide='ignore'):  # zero energy is -inf; callers decide whether that is missing
+        return float(10 * np.log10(np.trapezoid(p[mask], freqs[mask])))
+
+
+def finite_or_none(value):
+    return float(value) if np.isfinite(value) else None
 
 
 def floor_slope(freqs, p, lo=100.0, hi=245.0):
@@ -313,9 +318,12 @@ def analyze_night(recs, files, start_s, end_s):
                 entry = series.setdefault(window_start, {'t': window_start, 'pump': pump_by_window.get(window_start), 'bands': {}})
                 entry['bands'][channel] = {k: None for k in NIGHT_BANDS}
                 if windows:
+                    # A flat run of zero samples has no energy: -inf dB is missing, not a value.
                     for k, b in {**BANDS, **CONTEXT_BANDS}.items():
-                        medians[k].append(band_db(freqs, p, b))
-                    entry['bands'][channel] = {k: band_db(freqs, p, b) for k, b in NIGHT_BANDS.items()}
+                        value = band_db(freqs, p, b)
+                        if np.isfinite(value):
+                            medians[k].append(value)
+                    entry['bands'][channel] = {k: finite_or_none(band_db(freqs, p, b)) for k, b in NIGHT_BANDS.items()}
             row['channels'][channel] = {'lostSamples': lost, 'bandDbPercentiles': {
                 k: (np.percentile(v, [10, 50, 90]).tolist() if v else None) for k, v in medians.items()}}
         hours.append(row)
