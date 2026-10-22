@@ -23,11 +23,12 @@ From [light-sleep confusion, 2026-10-21](../knowledge/evaluation/light-sleep-con
 
 Run this before building iPhone capture or the dashboard. The pod samples each piezo channel at 500 Hz (`SAMPLE_RATE` in core `modules/piezo-processor/main.py`), so the 16–30 Hz and 60–100 Hz bands sit below the 250 Hz Nyquist limit. Front-end filtering, ADC resolution and mattress coupling may still remove them; sampling rate alone does not establish bandwidth.
 
+- Tool: `scripts/piezo_bandwidth.py` (`session`, `analyze`, `night`), reading raw files through `GET /api/export/archive`.
 - Dump both raw channels for one full occupied night through the existing raw-data path, plus a short scripted session on the same bed.
 - Scripted session, each step 60 s and timestamped by hand: empty bed with pump off (or at its quietest), empty bed with pump running, occupant lying still, occupant humming low and sustained with head on the pillow, occupant imitating snoring, three knocks on the bed frame at the head and at the foot.
-- Compute Welch spectra per channel and step. Report band power in 16–30 Hz and 60–100 Hz relative to the empty-bed, pump-off baseline, the noise-floor slope above 100 Hz, clipping counts and lost-sample counts.
-- Pass bar, fixed before the session: hum or imitated snoring raises band power at least 6 dB above baseline on the occupant's side in a band, and knocks appear as transients in both channels. A band that fails is treated as empty.
-- Use the overnight dump to measure the real compression ratio and pod write load for section 3.
+- Compute Welch spectra per channel and step, dropping the first 10 s and last 5 s of each step. Report band power in 16–30 Hz and 60–100 Hz, the noise-floor slope above 100 Hz, pump RPM and lost-sample counts. Empty-bed, pump-off is the sensor noise floor; lying still is the reference for the pass bar, because heartbeat and breathing harmonics already put occupied energy into 16–30 Hz.
+- Pass bar, fixed in `PASS_BAR` before the session: hum or imitated snoring raises band power at least 6 dB above lying still on the occupant's channel, and at least three knocks per step exceed 8 robust standard deviations of the lying-still signal above 20 Hz in both channels. A band that fails is treated as empty.
+- Use the overnight dump to measure the real compression ratio and pod write load for section 3. A one-hour development export on 2026-10-21 showed 2 channels (`left1`, `right1`) at 500 Hz, 100% second coverage, about 2% of seconds with lost samples (mostly 1–2 samples), and a 0.63 archive gzip ratio.
 
 Outcomes:
 
@@ -96,7 +97,7 @@ New work:
 
 Storage budget:
 
-- Rate: 500 Hz × 4 bytes per channel = 2 kB/s, 7.2 MB/hour per channel. Two channels are about 115 MB per 8-hour night before gzip; four channels about 230 MB. The section 0 night measures the actual gzip ratio and channel count.
+- Rate: 500 Hz × 4 bytes per channel = 2 kB/s, 7.2 MB/hour per channel. Two channels are about 115 MB per 8-hour night before gzip; four channels about 230 MB. The whole RAW stream including other record types measured about 17 MB/hour, and 0.63 gzip puts the archive at roughly 11 MB/hour, about 86 MB per 8-hour night; the section 0 night confirms this.
 - Pod: the existing archive on `/persistent` (about 10 GB free per the export route's staging note), bounded by the 80% pruner. Pinned sessions are capped at two nights; pinning a third fails until one is retrieved or unpinned. Measure free space before the first pin.
 - Permanent home: the Mac training workspace under ignored data/raw/, never Git and never the phone. Retention there is per-session and user-deletable; derived aggregates are what get committed after review.
 
