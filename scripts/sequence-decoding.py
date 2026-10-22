@@ -146,6 +146,9 @@ def main():
     groups = sorted({n['group'] for n in nights})
     if len(groups) < 5:
         raise ValueError('Need at least five independent night groups')
+    unlabeled = [g for g in groups if not any(r['y'] is not None for n in nights if n['group'] == g for r in n['rows'])]
+    if unlabeled:
+        raise ValueError(f'Night groups without Watch labels cannot be evaluated: {", ".join(unlabeled)}')
     args.out.mkdir(parents=True, exist_ok=True)
     if any(args.out.iterdir()):
         raise ValueError('Use an empty output directory; do not overwrite an evaluation or partial run')
