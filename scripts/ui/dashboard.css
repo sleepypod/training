@@ -1035,3 +1035,46 @@ summary {
   background: transparent;
   border: 1px dashed var(--muted);
 }
+.task-switch {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 12px;
+  align-items: center;
+}
+.task-switch button:not(.help) {
+  flex: 1;
+  padding: 5px 6px;
+  font-size: 13px;
+}
+.task-switch button[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+body.task-view .sleep-only {
+  display: none !important;
+}
+.task-view-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+.task-view-panels > * {
+  min-width: 0;
+}
+.task-chart {
+  min-width: 680px;
+}
+.task-view-panels .scorecards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.task-view-panels code {
+  display: block;
+  overflow-x: auto;
+  white-space: pre;
+}
+.task-view-panels .scorecard strong {
+  overflow-wrap: anywhere;
+}

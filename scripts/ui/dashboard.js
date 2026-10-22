@@ -70,6 +70,42 @@ const glossary = {
     'Epoch & hypnogram',
     'An epoch is a five-minute interval represented by one feature row. A hypnogram is a stepped sleep-stage chart over time, ordered Wake, REM, Light, Deep. Gaps stay empty when readings or labels are unavailable. Watch and pod outputs are sampled at interval midpoints, so these plots do not reproduce finer stage boundaries.',
   ],
+  tasks: [
+    'Sleep · Movement · Snore',
+    'The workspace holds three kinds of research run. Sleep runs train and evaluate sleep-stage models. Movement runs compare a movement classifier with the pod’s own movement score. Snore runs record the piezo bandwidth gate and overnight snore-band energy. Each kind keeps its own views; switching task filters the run list.',
+  ],
+  cueLabels: [
+    'Cue labels',
+    'Movement sessions are scripted: the computer says each movement aloud and records when it asked. A window takes the class of a cued movement it half covers, starting one second after the cue, or is still when it is at least three seconds clear of every movement. Windows in between are transitions and are not scored. Cued movements are deliberate and are not the same as natural movements during sleep.',
+  ],
+  movingRecall: [
+    'Moving recall',
+    'Of the windows labeled as a movement, the share flagged as moving. Higher is better. It ignores which movement type was predicted.',
+  ],
+  stillFalseAlarm: [
+    'False alarms while still',
+    'Of the windows labeled still, the share flagged as moving. Lower is better. A detector that flags everything has perfect moving recall and a 100% false-alarm rate.',
+  ],
+  balancedAccuracy: [
+    'Balanced accuracy',
+    'The average of moving recall and the still rate (one minus false alarms). It treats moving and still windows equally, so a run with mostly still windows cannot score well by always answering still.',
+  ],
+  podScore: [
+    'Pod movement score',
+    'The pod’s existing movement measure: one value per minute from the capacitance channels, the sum of channel-to-channel changes after noise and pump gating. As the baseline it flags a window as moving when the minute containing it scores at or above a threshold chosen on the training folds. It cannot resolve movements shorter than a minute and cannot say what kind of movement happened.',
+  ],
+  bandEnergy: [
+    'Snore-band energy',
+    'Power of the raw 500 Hz piezo signal in the 16–30 Hz and 60–100 Hz bands, in dB of uncalibrated ADC units. Breathing, heartbeat, movement, voice and the pump all add energy here, so a rise is not a detected snore; only differences within one pod and setup are meaningful.',
+  ],
+  passBar: [
+    'Bandwidth pass bar',
+    'Fixed before any session: a band passes when humming or imitated snoring raises it at least 6 dB over lying still on the occupant’s channel. Every scored step needs 80% of its samples. Outcome both-bands, low-band-only, high-band-only, neither, or incomplete.',
+  ],
+  knocks: [
+    'Knock check',
+    'Each knock step needs at least three transients above 20 Hz on every channel. Knocks are for lining up the phone and pod clocks later; they do not change the band outcome. Body movement while knocking can add extra events on the occupant’s channel.',
+  ],
   weeks: [
     'Weeks / weekly averages',
     'The Weeks view stacks each night’s stage minutes and groups nights into ISO weeks (Monday to Sunday) by the local noon-to-noon night date. Each night counts only intervals where every displayed source has a stage, so Watch, pod and model minutes share a denominator. Weekly averages use nights with shared data; nights without it are gaps, never zero. These are descriptive, retrospective summaries of already-inspected nights, not a trend test or a prediction for future weeks.',
@@ -179,7 +215,9 @@ const glossary = {
     'Minutes from the recorded entry into bed to the current epoch. This can help a model learn patterns that vary across a night, but time in bed alone does not determine a sleep stage.',
   ],
 };
-let doc = null,
+let task = 'sleep',
+  moveSession = null,
+  doc = null,
   runs = [],
   runId = null,
   activeTab = 'overview',
@@ -346,7 +384,7 @@ const tabs = ['overview', 'nights', 'weeks', 'data', 'log'];
 function showTab(tab, focus = false) {
   activeTab = tab;
   for (const name of tabs) {
-    $(name).hidden = name !== tab;
+    $(name).hidden = !isSleep() || name !== tab;
     const b = $('tab-' + name);
     b.setAttribute('aria-selected', String(name === tab));
     b.tabIndex = name === tab ? 0 : -1;
@@ -381,17 +419,19 @@ function renderGlossary(key) {
 function renderRuns() {
   const query = $('run-search').value.toLowerCase(),
     filter = $('run-filter').value;
-  const filtered = runs.filter(
-    (r) =>
-      (r.name + ' ' + r.notes + ' ' + (r.candidate || ''))
-        .toLowerCase()
-        .includes(query) &&
-      (filter === 'all' ||
-        (filter === 'failed'
-          ? ['failed', 'interrupted', 'cancelled'].includes(r.status)
-          : r.status === filter)),
-  );
-  $('run-count').textContent = runs.length;
+  renderTaskSwitch();
+  const own = runs.filter((r) => runTask(r) === task),
+    filtered = own.filter(
+      (r) =>
+        (r.name + ' ' + r.notes + ' ' + (r.candidate || ''))
+          .toLowerCase()
+          .includes(query) &&
+        (filter === 'all' ||
+          (filter === 'failed'
+            ? ['failed', 'interrupted', 'cancelled'].includes(r.status)
+            : r.status === filter)),
+    );
+  $('run-count').textContent = own.length;
   $('run-list').replaceChildren(
     ...filtered.map((r) => {
       const b = n('button', null, 'run ' + (r.id === runId ? 'selected' : ''));
@@ -409,6 +449,7 @@ function renderRuns() {
       );
       if (r.macroF1 != null)
         b.append(n('span', fmt(r.macroF1) + ' F1', 'run-score'));
+      else if (r.summary) b.append(n('span', r.summary, 'run-score'));
       b.disabled = !r.available;
       b.onclick = () => selectRun(r.id);
       return b;
@@ -416,13 +457,15 @@ function renderRuns() {
   );
   setOptions(
     $('run-select'),
-    runs.map((r) => [r.id, r.name + ' · ' + r.status]),
+    own.map((r) => [r.id, r.name + ' · ' + r.status]),
     runId,
   );
 }
 async function selectRun(id) {
   if (offline) return;
   runId = id;
+  const picked = runs.find((r) => r.id === id);
+  if (picked) task = runTask(picked);
   requestVersion++;
   lastPayload = '';
   allEvents = null;
@@ -437,6 +480,7 @@ async function selectRun(id) {
   document
     .querySelectorAll('[role=tabpanel]')
     .forEach((e) => (e.hidden = true));
+  $('task-view').hidden = true;
   try {
     const version = requestVersion,
       response = await fetch('/api/runs/' + id, { cache: 'no-store' });
@@ -447,7 +491,7 @@ async function selectRun(id) {
     lastPayload = text;
     render();
     showTab(activeTab);
-    history.replaceState(null, '', '#run=' + id);
+    history.replaceState(null, '', '#task=' + task + '&run=' + id);
   } catch (e) {
     $('connection').textContent =
       'Could not load this run. Its folder may have moved.';
@@ -467,11 +511,15 @@ async function poll() {
     }
     $('empty').classList.toggle('hidden', runs.length > 0);
     if (!runId && runs.length) {
-      await selectRun(
-        new URLSearchParams(location.hash.slice(1)).get('run') ||
-          embedded.initialRun ||
-          runs[0].id,
-      );
+      const hash = new URLSearchParams(location.hash.slice(1)),
+        wanted = hash.get('run') || embedded.initialRun,
+        asked = ['sleep', 'movement', 'snore'].includes(hash.get('task'));
+      if (asked) task = hash.get('task');
+      const first =
+        runs.find((r) => runTask(r) === task) || (!asked && runs[0]);
+      if (wanted && runs.some((r) => r.id === wanted)) await selectRun(wanted);
+      else if (first) await selectRun(first.id);
+      else taskEmpty();
     } else if (runId && (!doc || doc.state?.status === 'running')) {
       const version = requestVersion,
         r = await fetch('/api/runs/' + runId, { cache: 'no-store' });
@@ -494,6 +542,16 @@ async function poll() {
 }
 function render() {
   if (!doc) return;
+  document.body.classList.toggle('task-view', !isSleep());
+  if (!isSleep()) {
+    tabs.forEach((name) => ($(name).hidden = true));
+    renderTaskHeader();
+    renderTask();
+    renderDownloads();
+    return;
+  }
+  $('task-view').hidden = true;
+  $('experiment-label').textContent = taskTitle.sleep;
   renderHeader();
   renderOverview();
   if (!document.activeElement?.closest('#overview-timeline, #nights-timeline'))
@@ -2331,6 +2389,819 @@ function renderDownloads() {
     if (!offline) a.href = '/api/runs/' + runId + '/' + suffix;
   }
 }
+// ---- Movement and snore research runs ----
+const taskOf = {
+    sleep: 'sleep',
+    movement: 'movement',
+    'snore-session': 'snore',
+    'snore-night': 'snore',
+  },
+  taskTitle = {
+    sleep: 'SLEEP STAGE EXPERIMENT',
+    movement: 'MOVEMENT EXPERIMENT',
+    snore: 'SNORE RESEARCH',
+  },
+  moveClasses = ['still', 'arm', 'leg', 'turn', 'sit'],
+  moveColors = {
+    still: '#55574c',
+    arm: '#c3e25a',
+    leg: '#6bc1e7',
+    turn: '#bc9ad9',
+    sit: '#d9b978',
+  },
+  channelColors = {
+    left1: '#6bc1e7',
+    right1: '#eb8376',
+    left2: '#c3e25a',
+    right2: '#d9b978',
+  },
+  snoreBands = ['60-100Hz', '16-30Hz'];
+function runTask(run) {
+  return taskOf[run?.kind || 'sleep'] || 'sleep';
+}
+function isSleep() {
+  return !doc || runTask(doc) === 'sleep';
+}
+// Metric rows comparing the pod movement score with the classifier.
+function movementRows(report) {
+  const b = report.baseline || {},
+    c = report.classifier || {},
+    rows = [
+      ['Moving recall', b.movingRecall, c.movingRecall, 'movingRecall'],
+      [
+        'False alarms while still',
+        b.stillFalseAlarm,
+        c.stillFalseAlarm,
+        'stillFalseAlarm',
+      ],
+      [
+        'Balanced accuracy',
+        b.balancedAccuracy,
+        c.balancedAccuracy,
+        'balancedAccuracy',
+      ],
+    ];
+  for (const name of moveClasses) {
+    const base = b.flaggedMovingByClass?.[name],
+      model = c.flaggedMovingByClass?.[name];
+    if (base != null || model != null)
+      rows.push(['Flagged as moving · ' + name, base, model, null]);
+  }
+  return rows;
+}
+// Contiguous segments of one value per session; a gap in window times breaks a segment.
+function segments(windows, field, hop) {
+  const out = [];
+  for (const w of [...windows].sort((a, b) => a.t - b.t)) {
+    const value = w[field];
+    if (value == null) continue;
+    const last = out[out.length - 1];
+    if (last && last.value === value && w.t - last.end <= 1e-6)
+      last.end = w.t + hop;
+    else out.push({ start: w.t, end: w.t + hop, value });
+  }
+  return out;
+}
+// Rises over lying still for each scored band, with the pass bar applied.
+function snoreRiseRows(report) {
+  const bar = report.passBar?.minRiseDb ?? 6,
+    rows = [];
+  for (const [band, result] of Object.entries(report.bands || {}))
+    for (const [key, rise] of Object.entries(result.risesDb || {})) {
+      const [stimulus, channel] = key.split('/');
+      rows.push({ band, stimulus, channel, rise, pass: rise >= bar });
+    }
+  return rows;
+}
+// One band's night series for a channel, split into runs at missing values or time gaps.
+function nightRuns(windows, channel, band, step) {
+  const runs = [];
+  let current = null,
+    previous = null;
+  for (const w of [...windows].sort((a, b) => a.t - b.t)) {
+    const v = w.bands?.[channel]?.[band];
+    if (v == null || (previous != null && w.t - previous > step)) {
+      if (current) runs.push(current);
+      current = null;
+    }
+    if (v != null) {
+      current = current || [];
+      current.push({ t: w.t, v });
+    }
+    previous = w.t;
+  }
+  if (current) runs.push(current);
+  return runs;
+}
+function extent(values, pad = 0) {
+  const finite = values.filter((v) => v != null && Number.isFinite(v));
+  if (!finite.length) return null;
+  return [Math.min(...finite) - pad, Math.max(...finite) + pad];
+}
+function clock(seconds) {
+  return new Date(seconds * 1000).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+function renderTaskHeader() {
+  const kind = doc.kind,
+    r = doc.taskReport || {};
+  $('experiment-label').textContent = taskTitle[runTask(doc)];
+  $('run-title').textContent = doc.config?.name || doc.name || 'Saved run';
+  $('status').textContent = 'complete';
+  $('status').className = 'badge complete';
+  const generated = r.generatedAt
+      ? new Date(r.generatedAt).toLocaleString()
+      : null,
+    meta =
+      kind === 'movement'
+        ? [
+            `${r.windows ?? '—'} windows`,
+            `${(r.sessions || []).length} session${(r.sessions || []).length === 1 ? '' : 's'}`,
+            r.validation,
+          ]
+        : kind === 'snore-session'
+          ? [
+              'Bandwidth gate session',
+              'occupant ' + (r.occupantChannels || []).join(', '),
+              (r.channels || []).length + ' channels',
+            ]
+          : [
+              'Overnight snore-band energy',
+              r.windowSeconds != null
+                ? (r.windowSeconds / 3600).toFixed(1) + ' h'
+                : null,
+              (r.channels || []).join(', '),
+            ];
+  $('run-meta').textContent = [...meta, generated && 'generated ' + generated]
+    .filter(Boolean)
+    .join(' · ');
+}
+function renderTask() {
+  const host = $('task-view');
+  host.replaceChildren();
+  host.hidden = false;
+  if (!doc.taskReport) {
+    host.append(empty('This run has no report.json yet.'));
+    return;
+  }
+  if (doc.kind === 'movement') renderMovement(host);
+  else if (doc.kind === 'snore-session') renderSnoreSession(host);
+  else renderSnoreNight(host);
+}
+function rate(v) {
+  return v == null ? '—' : pct(v);
+}
+function renderMovement(host) {
+  const r = doc.taskReport,
+    c = r.classifier || {},
+    b = r.baseline || {};
+  const cards = n('div', null, 'scorecards');
+  cards.append(
+    card(
+      'Windows',
+      String(r.windows ?? '—'),
+      `${r.windowSeconds ?? 2} s, ${r.hopSeconds ?? 1} s hop`,
+      'cueLabels',
+    ),
+    card(
+      'Pod score',
+      rate(b.balancedAccuracy),
+      'balanced accuracy',
+      'podScore',
+    ),
+    card(
+      'Classifier',
+      rate(c.balancedAccuracy),
+      'balanced accuracy · macro F1 ' + fmt(c.macroF1, 2),
+      'balancedAccuracy',
+    ),
+    card(
+      'Validation',
+      (r.sessions || []).length > 1 ? 'By session' : 'Within one',
+      r.validation || '—',
+    ),
+  );
+  const summary = panel('Pod movement score vs classifier', 'tasks');
+  summary.append(cards);
+  if ((r.sessions || []).length < 2)
+    summary.append(
+      n(
+        'p',
+        'Only one session: folds share a person, night and setup, so these numbers are optimistic. Add sessions to hold each one out.',
+        'notice',
+      ),
+    );
+  const metricTable = n('table');
+  metricTable.setAttribute('aria-label', 'Pod score and classifier metrics');
+  table(
+    metricTable,
+    ['Measure', 'Pod movement score', 'Classifier'],
+    movementRows(r).map(([label, base, model, key]) => {
+      const name = n('span', label);
+      if (key) name.append(help(key));
+      return [name, rate(base), rate(model)];
+    }),
+  );
+  const wrap = n('div', null, 'table-scroll');
+  wrap.append(metricTable);
+  summary.append(
+    wrap,
+    n(
+      'p',
+      'The pod score is one value per minute, so it is scored on the minute around each 2 s window and cannot tell movement types apart. Its threshold is chosen on the training folds' +
+        (b.thresholds?.length ? ' (' + b.thresholds.join(', ') + ').' : '.'),
+      'footnote',
+    ),
+  );
+  host.append(summary);
+  const confusion = panel('Classifier · movement types', 'cueLabels'),
+    classes = c.classes || [],
+    ct = n('table');
+  ct.setAttribute('aria-label', 'Classifier confusion matrix');
+  table(
+    ct,
+    ['Labeled ↓ / predicted →', ...classes, 'Recall'],
+    classes.map((name, i) => [
+      name,
+      ...(c.confusion?.[i] || []).map(String),
+      rate(c.recall?.[name]),
+    ]),
+  );
+  const cw = n('div', null, 'table-scroll');
+  cw.append(ct);
+  confusion.append(
+    cw,
+    n(
+      'p',
+      'Out-of-fold predictions: every window is scored by a model that did not train on its movement' +
+        ((r.sessions || []).length > 1 ? ' or its session.' : '.'),
+      'footnote',
+    ),
+  );
+  host.append(confusion);
+  host.append(movementTimeline(r));
+}
+function movementTimeline(r) {
+  const p = panel('Session timeline', 'cueLabels'),
+    windows = doc.windows || [];
+  if (!windows.some((w) => w.predicted != null)) {
+    p.append(
+      empty(
+        'This run did not save per-window predictions. Retrain to see the timeline.',
+      ),
+    );
+    return p;
+  }
+  const sessions = [...new Set(windows.map((w) => w.session))];
+  if (!sessions.includes(moveSession)) moveSession = sessions[0];
+  const controls = n('div', null, 'timeline-controls'),
+    label = n('label', 'Session '),
+    select = n('select');
+  select.setAttribute('aria-label', 'Movement session');
+  setOptions(
+    select,
+    sessions.map((s) => [s, s]),
+    moveSession,
+  );
+  select.onchange = () => {
+    moveSession = select.value;
+    renderTask();
+  };
+  label.append(select);
+  controls.append(label);
+  const legendRow = n('div', null, 'legend');
+  for (const name of moveClasses) {
+    const s = n('span', name),
+      dot = n('i');
+    dot.style.background = moveColors[name];
+    s.prepend(dot);
+    legendRow.append(s);
+  }
+  const movingKey = n('span', 'pod score: moving'),
+    movingDot = n('i');
+  movingDot.style.background = '#eb8376';
+  movingKey.prepend(movingDot);
+  legendRow.append(movingKey);
+  p.append(controls, legendRow);
+  const own = windows.filter((w) => w.session === moveSession),
+    hop = r.hopSeconds || 1,
+    start = Math.min(...own.map((w) => w.t)),
+    end = Math.max(...own.map((w) => w.t)) + hop,
+    perSecond = 3,
+    left = 92,
+    lane = 22,
+    width = left + (end - start) * perSecond + 10,
+    lanes = [
+      ['Label', segments(own, 'label', hop), (v) => moveColors[v]],
+      ['Classifier', segments(own, 'predicted', hop), (v) => moveColors[v]],
+      [
+        'Pod score',
+        segments(
+          own.map((w) => ({
+            ...w,
+            moving:
+              w.baselineMoving == null
+                ? null
+                : w.baselineMoving
+                  ? 'moving'
+                  : 'still',
+          })),
+          'moving',
+          hop,
+        ),
+        (v) => (v === 'moving' ? '#eb8376' : moveColors.still),
+      ],
+    ],
+    height = 20 + lanes.length * (lane + 8) + 24,
+    svg = svgEl('svg', {
+      viewBox: `0 0 ${width} ${height}`,
+      width,
+      height,
+      class: 'task-chart',
+      role: 'img',
+      'aria-label':
+        'Labels, classifier predictions and pod-score flags over the session',
+    });
+  lanes.forEach(([name, segs, color], i) => {
+    const y = 14 + i * (lane + 8);
+    svg.append(
+      svgEl(
+        'text',
+        { x: 0, y: y + 15, fill: '#96988b', 'font-size': 11 },
+        name,
+      ),
+    );
+    for (const s of segs) {
+      const rect = svgEl('rect', {
+        x: left + (s.start - start) * perSecond,
+        y,
+        width: Math.max((s.end - s.start) * perSecond - 0.5, 0.5),
+        height: lane,
+        fill: color(s.value),
+        rx: 2,
+      });
+      rect.append(
+        svgEl(
+          'title',
+          {},
+          `${name}: ${s.value} · ${Math.round(s.start - start)}–${Math.round(s.end - start)} s`,
+        ),
+      );
+      svg.append(rect);
+    }
+  });
+  const axisY = 14 + lanes.length * (lane + 8) + 10;
+  for (let t = 0; t <= end - start; t += 30)
+    svg.append(
+      svgEl(
+        'text',
+        {
+          x: left + t * perSecond,
+          y: axisY,
+          fill: '#96988b',
+          'font-size': 9,
+          'text-anchor': 'middle',
+        },
+        t + ' s',
+      ),
+    );
+  const scroll = n('div', null, 'timeline-scroll');
+  scroll.append(svg);
+  p.append(
+    scroll,
+    n(
+      'p',
+      'Blank stretches are transitions or windows with missing data; they are not scored and are never drawn as still.',
+      'footnote',
+    ),
+  );
+  return p;
+}
+function renderSnoreSession(host) {
+  const r = doc.taskReport,
+    p = panel('Piezo bandwidth gate', 'passBar'),
+    badge = n(
+      'span',
+      r.outcome || '—',
+      'badge ' +
+        (r.outcome === 'both-bands'
+          ? 'complete'
+          : r.outcome === 'incomplete'
+            ? 'running'
+            : 'failed'),
+    );
+  p.querySelector('.panel-heading').append(badge);
+  const rises = n('table');
+  rises.setAttribute('aria-label', 'Band rises over lying still');
+  table(
+    rises,
+    [
+      'Band',
+      'Step',
+      'Channel',
+      'Rise over lying still',
+      'Pass bar ' + (r.passBar?.minRiseDb ?? 6) + ' dB',
+    ],
+    snoreRiseRows(r).map((row) => [
+      row.band,
+      row.stimulus.replace('occupied_', ''),
+      row.channel,
+      (row.rise >= 0 ? '+' : '') + row.rise.toFixed(1) + ' dB',
+      row.pass ? 'pass' : 'below',
+    ]),
+  );
+  const rw = n('div', null, 'table-scroll');
+  rw.append(rises);
+  p.append(
+    rw,
+    n(
+      'p',
+      'Energy rises during deliberate humming and imitated snoring. This shows the sensor can carry these bands; it does not detect real snoring.',
+      'footnote',
+    ),
+  );
+  host.append(p);
+  const knocks = panel('Knocks', 'knocks'),
+    kt = n('table'),
+    channels = r.channels || [];
+  kt.setAttribute('aria-label', 'Knock events by step and channel');
+  table(
+    kt,
+    ['Step', ...channels],
+    Object.entries(r.knockEvents || {}).map(([step, counts]) => [
+      step,
+      ...channels.map((ch) =>
+        counts?.[ch] == null ? '—' : String(counts[ch]),
+      ),
+    ]),
+  );
+  const kw = n('div', null, 'table-scroll');
+  kw.append(kt);
+  knocks.append(
+    kw,
+    n(
+      'p',
+      (r.knockPassed ? 'Knock check passed. ' : 'Knock check did not pass. ') +
+        'Knocks gate the clock sync for later capture, not the band outcome.',
+      'footnote',
+    ),
+  );
+  host.append(knocks);
+  const steps = panel('Steps', 'bandEnergy'),
+    st = n('table'),
+    bandsShown = ['16-30Hz', '60-100Hz', '1-10Hz'];
+  st.setAttribute('aria-label', 'Band energy per step and channel');
+  table(
+    st,
+    [
+      'Step',
+      'Pump max rpm',
+      ...channels.flatMap((ch) => [
+        ch + ' coverage',
+        ...bandsShown.map((b) => ch + ' ' + b),
+      ]),
+    ],
+    Object.entries(r.steps || {}).map(([name, step]) => [
+      name,
+      step.pump?.maxRpm == null ? '—' : String(step.pump.maxRpm),
+      ...channels.flatMap((ch) => {
+        const c = step.channels?.[ch] || {};
+        return [
+          c.coverage == null ? '—' : pct(c.coverage),
+          ...bandsShown.map((b) =>
+            c.bandDb?.[b] == null ? '—' : c.bandDb[b].toFixed(1),
+          ),
+        ];
+      }),
+    ]),
+  );
+  const sw = n('div', null, 'table-scroll');
+  sw.append(st);
+  steps.append(sw);
+  for (const w of r.warnings || []) steps.append(n('p', w, 'notice'));
+  host.append(steps);
+}
+function renderSnoreNight(host) {
+  const r = doc.taskReport,
+    windows = doc.windows || [],
+    s = r.storage || {},
+    p = panel('Overnight snore-band energy', 'bandEnergy'),
+    cards = n('div', null, 'scorecards');
+  cards.append(
+    card(
+      'Coverage',
+      r.coverage == null ? '—' : pct(r.coverage),
+      `${r.piezoSeconds ?? '—'} of ${r.windowSeconds ?? '—'} s`,
+    ),
+    card(
+      'Channels',
+      (r.channels || []).join(', ') || '—',
+      (r.freq || []).join(', ') + ' Hz',
+    ),
+    card(
+      'Archive gzip',
+      s.archiveGzipRatio == null ? '—' : s.archiveGzipRatio.toFixed(2),
+      s.archivedFiles + ' archived files',
+    ),
+    card(
+      'Pod writes',
+      s.exportRawBytes != null && r.windowSeconds
+        ? (
+            (s.exportRawBytes * (s.archiveGzipRatio ?? 1)) /
+            1e6 /
+            (r.windowSeconds / 3600)
+          ).toFixed(1) + ' MB/h'
+        : '—',
+      'RAW stream after gzip, approximate',
+    ),
+  );
+  p.append(
+    cards,
+    n(
+      'p',
+      'Vibration energy per ' +
+        (r.windowSecondsEach || 30) +
+        ' s window, not detected snoring: movement, voice, heartbeat and the pump also raise these bands. Times are shown in this browser’s time zone.',
+      'notice',
+    ),
+  );
+  for (const w of r.warnings || []) p.append(n('p', w, 'notice'));
+  host.append(p);
+  if (!windows.length) {
+    host.append(
+      empty(
+        'This night was analyzed before per-window energy was saved. Rerun `night` to see the timeline.',
+      ),
+    );
+    return;
+  }
+  const ref = doc.reference,
+    step = (r.windowSecondsEach || 30) * 1.5,
+    channels = r.channels || [],
+    t0 = Math.min(...windows.map((w) => w.t)),
+    t1 = Math.max(...windows.map((w) => w.t)) + (r.windowSecondsEach || 30),
+    left = 48,
+    right = 150,
+    plot = 150,
+    width = left + 900 + right,
+    x = (t) => left + ((t - t0) / (t1 - t0)) * (width - left - right);
+  for (const band of snoreBands) {
+    const chart = panel(band.replace('Hz', ' Hz') + ' band', 'bandEnergy'),
+      values = windows.flatMap((w) =>
+        channels.map((ch) => w.bands?.[ch]?.[band]),
+      ),
+      refs = ref ? [ref.still?.[band], ref.snore?.[band]] : [],
+      range = extent([...values, ...refs], 3);
+    if (!range) {
+      chart.append(empty('No energy recorded in this band.'));
+      host.append(chart);
+      continue;
+    }
+    const y = (v) =>
+        12 + plot - ((v - range[0]) / (range[1] - range[0])) * plot,
+      svg = svgEl('svg', {
+        viewBox: `0 0 ${width} ${plot + 40}`,
+        width,
+        height: plot + 40,
+        class: 'task-chart',
+        role: 'img',
+        'aria-label':
+          band + ' band energy over the night for ' + channels.join(' and '),
+      });
+    for (let k = 0; k <= 4; k++) {
+      const v = range[0] + ((range[1] - range[0]) * k) / 4;
+      svg.append(
+        svgEl('line', {
+          x1: left,
+          x2: width - right,
+          y1: y(v),
+          y2: y(v),
+          stroke: '#25271f',
+          'stroke-width': 0.6,
+        }),
+        svgEl(
+          'text',
+          {
+            x: left - 6,
+            y: y(v) + 3,
+            fill: '#96988b',
+            'font-size': 11,
+            'text-anchor': 'end',
+          },
+          v.toFixed(0),
+        ),
+      );
+    }
+    for (let h = Math.ceil(t0 / 3600) * 3600; h <= t1; h += 3600)
+      svg.append(
+        svgEl(
+          'text',
+          {
+            x: x(h),
+            y: plot + 30,
+            fill: '#96988b',
+            'font-size': 11,
+            'text-anchor': 'middle',
+          },
+          clock(h),
+        ),
+      );
+    if (ref)
+      for (const [key, name] of [
+        ['still', 'lying still'],
+        ['snore', 'imitated snore'],
+      ]) {
+        const v = ref[key]?.[band];
+        if (v == null) continue;
+        svg.append(
+          svgEl('line', {
+            x1: left,
+            x2: width - right,
+            y1: y(v),
+            y2: y(v),
+            stroke: '#96988b',
+            'stroke-dasharray': '4 3',
+          }),
+          svgEl(
+            'text',
+            {
+              x: width - right + 6,
+              y: y(v) + 3,
+              fill: '#96988b',
+              'font-size': 11,
+            },
+            `scripted ${name} (${ref.channel})`,
+          ),
+        );
+      }
+    for (const ch of channels)
+      for (const run of nightRuns(windows, ch, band, step))
+        svg.append(
+          svgEl('path', {
+            d: run
+              .map(
+                (pt, i) =>
+                  (i ? 'L' : 'M') +
+                  x(pt.t).toFixed(1) +
+                  ' ' +
+                  y(pt.v).toFixed(1),
+              )
+              .join(' '),
+            fill: 'none',
+            stroke: channelColors[ch] || '#e7e8df',
+            'stroke-width': 1.2,
+            'stroke-linejoin': 'round',
+          }),
+        );
+    for (const w of windows) {
+      const hit = svgEl('rect', {
+        x: x(w.t),
+        y: 12,
+        width: Math.max(x(w.t + (r.windowSecondsEach || 30)) - x(w.t), 1),
+        height: plot,
+        fill: 'transparent',
+      });
+      hit.append(
+        svgEl(
+          'title',
+          {},
+          clock(w.t) +
+            ' · ' +
+            channels
+              .map(
+                (ch) =>
+                  ch +
+                  ' ' +
+                  (w.bands?.[ch]?.[band] == null
+                    ? 'no data'
+                    : w.bands[ch][band].toFixed(1) + ' dB'),
+              )
+              .join(' · ') +
+            (w.pump == null ? '' : ' · pump ' + w.pump + ' rpm'),
+        ),
+      );
+      svg.append(hit);
+    }
+    const legendRow = n('div', null, 'legend');
+    for (const ch of channels) {
+      const s2 = n('span', ch),
+        dot = n('i');
+      dot.style.background = channelColors[ch] || '#e7e8df';
+      s2.prepend(dot);
+      legendRow.append(s2);
+    }
+    const scroll = n('div', null, 'timeline-scroll');
+    scroll.append(svg);
+    chart.append(legendRow, scroll);
+    if (ref)
+      chart.append(
+        n(
+          'p',
+          `Reference lines: the occupant channel’s lying-still and imitated-snore levels from bandwidth session “${ref.run}” on the same pod (${ref.outcome}).`,
+          'footnote',
+        ),
+      );
+    host.append(chart);
+  }
+  const pump = panel('Pump speed', 'bandEnergy'),
+    maxRpm = Math.max(1, ...windows.map((w) => w.pump || 0)),
+    psvg = svgEl('svg', {
+      viewBox: `0 0 ${width} 60`,
+      width,
+      height: 60,
+      class: 'task-chart',
+      role: 'img',
+      'aria-label': 'Pump speed over the night',
+    });
+  for (const w of windows) {
+    if (w.pump == null) continue;
+    const h = (w.pump / maxRpm) * 40,
+      rect = svgEl('rect', {
+        x: x(w.t),
+        y: 44 - h,
+        width: Math.max(x(w.t + (r.windowSecondsEach || 30)) - x(w.t), 1),
+        height: h,
+        fill: '#8a8b80',
+      });
+    rect.append(svgEl('title', {}, clock(w.t) + ' · pump ' + w.pump + ' rpm'));
+    psvg.append(rect);
+  }
+  const pscroll = n('div', null, 'timeline-scroll');
+  pscroll.append(psvg);
+  pump.append(
+    pscroll,
+    n(
+      'p',
+      'Maximum pump speed of either side per window; blank means no pump reading.',
+      'footnote',
+    ),
+  );
+  host.append(pump);
+  const hours = panel('Hourly band energy', 'bandEnergy'),
+    ht = n('table');
+  ht.setAttribute('aria-label', 'Hourly median band energy');
+  table(
+    ht,
+    [
+      'Hour',
+      'Seconds',
+      'Pump max rpm',
+      ...channels.flatMap((ch) =>
+        snoreBands.map((b) => ch + ' ' + b + ' median'),
+      ),
+    ],
+    (r.hours || []).map((h) => [
+      clock(h.startS),
+      String(h.piezoSeconds),
+      h.pump?.maxRpm == null ? '—' : String(h.pump.maxRpm),
+      ...channels.flatMap((ch) =>
+        snoreBands.map((b) => {
+          const q = h.channels?.[ch]?.bandDbPercentiles?.[b];
+          return q ? q[1].toFixed(1) : '—';
+        }),
+      ),
+    ]),
+  );
+  const hw = n('div', null, 'table-scroll');
+  hw.append(ht);
+  hours.append(hw);
+  host.append(hours);
+}
+function renderTaskSwitch() {
+  document.querySelectorAll('[data-task]').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.task === task));
+    b.disabled = offline;
+  });
+}
+function taskEmpty() {
+  const host = $('task-view'),
+    p = panel(
+      task === 'movement'
+        ? 'No movement runs yet'
+        : task === 'snore'
+          ? 'No snore runs yet'
+          : 'No sleep runs yet',
+      'tasks',
+    ),
+    command = {
+      movement:
+        'uv run --locked python scripts/movement.py session --side left --out data/movement/session-1.json',
+      snore:
+        'uv run --locked python scripts/piezo_bandwidth.py session --side left --out data/bandwidth/steps.json',
+      sleep: 'scripts/quickstart.sh',
+    }[task];
+  host.replaceChildren(p);
+  host.hidden = false;
+  p.append(
+    n(
+      'p',
+      'Start one from the terminal; it appears here when its report is written.',
+    ),
+    n('code', command),
+  );
+}
 document.addEventListener('click', (e) => {
   const h = e.target.closest('[data-help]');
   if (h) showHelp(h.dataset.help);
@@ -2377,6 +3248,26 @@ $('drift-night').onchange = renderFeatures;
 $('log-search').oninput = drawLog;
 $('log-phase').onchange = drawLog;
 $('load-log').onclick = loadLog;
+document.querySelectorAll('[data-task]').forEach((b) => {
+  b.onclick = () => {
+    if (task === b.dataset.task) return;
+    task = b.dataset.task;
+    renderRuns();
+    const first = runs.find((r) => runTask(r) === task);
+    if (first) selectRun(first.id);
+    else {
+      runId = null;
+      doc = null;
+      tabs.forEach((name) => ($(name).hidden = true));
+      document.body.classList.toggle('task-view', task !== 'sleep');
+      $('experiment-label').textContent = taskTitle[task];
+      $('run-title').textContent = 'Training workspace';
+      $('run-meta').textContent = 'No runs of this kind yet.';
+      history.replaceState(null, '', '#task=' + task);
+      taskEmpty();
+    }
+  };
+});
 $('run-search').oninput = renderRuns;
 $('run-filter').onchange = renderRuns;
 $('run-select').onchange = (e) => selectRun(e.target.value);
@@ -2395,6 +3286,8 @@ try {
 } catch {}
 if (offline) {
   doc = embedded;
+  task = runTask(doc);
+  renderTaskSwitch();
   render();
   $('run-list').append(n('p', 'Offline report · this run only', 'footnote'));
   $('run-select').replaceChildren(

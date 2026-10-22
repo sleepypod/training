@@ -13,7 +13,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   script +
-    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs}',
+    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf}',
   context,
 );
 const {
@@ -25,6 +25,13 @@ const {
   weeklyNights,
   weeklySummary,
   tabs,
+  runTask,
+  movementRows,
+  segments,
+  snoreRiseRows,
+  nightRuns,
+  extent,
+  taskOf,
 } = context.testAPI;
 test('pooled macro F1 weights stages equally, including absent stages', () => {
   const result = metrics([
@@ -175,4 +182,106 @@ test('weekly averages skip gaps and report differences versus Watch', () => {
 });
 test('tab order includes Weeks between Nights and Data', () => {
   assert.deepEqual(plain(tabs), ['overview', 'nights', 'weeks', 'data', 'log']);
+});
+test('runs map to sleep, movement or snore tasks; unknown kinds stay sleep', () => {
+  assert.equal(runTask({}), 'sleep');
+  assert.equal(runTask({ kind: 'movement' }), 'movement');
+  assert.equal(runTask({ kind: 'snore-session' }), 'snore');
+  assert.equal(runTask({ kind: 'snore-night' }), 'snore');
+  assert.equal(runTask({ kind: 'mystery' }), 'sleep');
+  assert.equal(runTask(null), 'sleep');
+  assert.deepEqual(plain(Object.values(taskOf)), [
+    'sleep',
+    'movement',
+    'snore',
+    'snore',
+  ]);
+});
+test('movement rows compare the pod score and classifier, including per-class rates', () => {
+  const rows = movementRows({
+    baseline: {
+      movingRecall: 0.5,
+      stillFalseAlarm: 0.2,
+      balancedAccuracy: 0.65,
+      flaggedMovingByClass: { still: 0.2, turn: 0.9 },
+    },
+    classifier: {
+      movingRecall: 0.9,
+      stillFalseAlarm: 0.05,
+      balancedAccuracy: 0.925,
+      flaggedMovingByClass: { still: 0.05, arm: 0.8, turn: 1 },
+    },
+  });
+  assert.deepEqual(plain(rows.slice(0, 3).map((r) => r[3])), [
+    'movingRecall',
+    'stillFalseAlarm',
+    'balancedAccuracy',
+  ]);
+  assert.deepEqual(plain(rows.slice(3).map((r) => r[0])), [
+    'Flagged as moving · still',
+    'Flagged as moving · arm',
+    'Flagged as moving · turn',
+  ]);
+  assert.equal(rows[4][1], undefined);
+  assert.equal(rows[4][2], 0.8);
+  assert.equal(movementRows({}).length, 3);
+});
+test('segments merge contiguous equal windows and break at gaps and missing values', () => {
+  const windows = [
+    { t: 3, label: 'arm' },
+    { t: 0, label: 'still' },
+    { t: 1, label: 'still' },
+    { t: 2, label: 'arm' },
+    { t: 4, label: null },
+    { t: 7, label: 'arm' },
+  ];
+  assert.deepEqual(plain(segments(windows, 'label', 1)), [
+    { start: 0, end: 2, value: 'still' },
+    { start: 2, end: 4, value: 'arm' },
+    { start: 7, end: 8, value: 'arm' },
+  ]);
+  assert.deepEqual(plain(segments([], 'label', 1)), []);
+});
+test('snore rises apply the pass bar per band, step and channel', () => {
+  const rows = snoreRiseRows({
+    passBar: { minRiseDb: 6 },
+    bands: {
+      '16-30Hz': {
+        risesDb: { 'occupied_hum/left1': 1.6, 'occupied_snore/left1': 9.6 },
+      },
+      '60-100Hz': { risesDb: { 'occupied_snore/left1': 6 } },
+    },
+  });
+  assert.deepEqual(
+    plain(rows.map((r) => [r.band, r.stimulus, r.channel, r.pass])),
+    [
+      ['16-30Hz', 'occupied_hum', 'left1', false],
+      ['16-30Hz', 'occupied_snore', 'left1', true],
+      ['60-100Hz', 'occupied_snore', 'left1', true],
+    ],
+  );
+  assert.equal(
+    snoreRiseRows({ bands: { x: { risesDb: { 'a/b': 5.9 } } } })[0].pass,
+    false,
+  );
+  assert.deepEqual(plain(snoreRiseRows({})), []);
+});
+test('night runs split at missing energy and time gaps, never bridging them', () => {
+  const w = (t, v) => ({ t, bands: { left1: { '60-100Hz': v } } });
+  const runs = nightRuns(
+    [w(60, 3), w(0, 1), w(30, 2), w(90, null), w(120, 4), w(300, 5), w(330, 6)],
+    'left1',
+    '60-100Hz',
+    45,
+  );
+  assert.deepEqual(plain(runs.map((r) => r.map((p) => p.v))), [
+    [1, 2, 3],
+    [4],
+    [5, 6],
+  ]);
+  assert.deepEqual(plain(nightRuns([w(0, 1)], 'right1', '60-100Hz', 45)), []);
+});
+test('extent ignores missing values and pads', () => {
+  assert.deepEqual(plain(extent([null, 3, 1, NaN, 2], 1)), [0, 4]);
+  assert.equal(extent([null, undefined]), null);
 });

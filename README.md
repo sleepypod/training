@@ -141,7 +141,25 @@ state and no known live process are labeled interrupted, without editing their
 saved state. Runs with a report but no pipeline status are archived, not assumed
 to have passed parity.
 
-The design is organized around a run sidebar, sticky pipeline header, and five tabs:
+A **Sleep / Movement / Snore** switch at the top of the sidebar picks the kind of
+research run; the run list shows only that kind. Movement runs (`scripts/movement.py
+train`) and snore runs (`scripts/piezo_bandwidth.py analyze` and `night`) register
+themselves when their output is under `data/`.
+
+- **Movement:** windows, validation scheme and sessions; the pod movement score and
+  the classifier side by side (moving recall, false alarms while still, balanced
+  accuracy, and how often each movement type was flagged as moving); the
+  classifier's confusion matrix and per-class recall; and a per-session timeline
+  of labels, classifier predictions and pod-score flags. The pod score is one value
+  per minute and cannot type movements; one-session validation is optimistic.
+- **Snore:** a bandwidth session shows each band's rise over lying still against the
+  6 dB pass bar, the outcome, knock counts (which gate clock sync, not the outcome),
+  pump speed and per-step band energy. A night shows 30 s band energy for every
+  channel in both snore bands, the pump, coverage and storage, and, when a session
+  from the same pod exists, its lying-still and imitated-snore levels as reference
+  lines. This is vibration energy, not detected snoring.
+
+Sleep runs are organized around a run sidebar, sticky pipeline header, and five tabs:
 
 - **Overview:** held-out scores, review checks, four-lane stage comparison,
   small hypnograms for every night, sleep architecture, fold results, per-stage
