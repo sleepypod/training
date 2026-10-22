@@ -285,6 +285,29 @@ either command to reanalyse a saved download. A failed or truncated download is
 deleted. Downloads and reports stay under ignored `data/`; reports hold spectra
 summaries, not samples.
 
+## Movement experiments
+
+Compares a movement classifier built from raw piezo and capacitance with the pod's
+own per-minute movement score. Labels come from scripted sessions: the computer
+speaks each cue aloud (`say` on macOS) and records when it asked for the movement.
+
+```sh
+uv run --locked python scripts/movement.py session --side left --pod 192.168.1.88 --out data/movement/session-1.json
+# about 45 minutes later, once the pod has written the data:
+uv run --locked python scripts/movement.py train --session data/movement/session-1.json --pod 192.168.1.88 --out data/runs/movement-001
+```
+
+The session takes about seven minutes: lie still, then move an arm, a leg, turn over
+and sit up when prompted, then lie still again. Training cuts the session into 2 s
+windows. Each window gets the class of a movement it half covers, `still` when it is
+clear of every movement, or is skipped as a transition. Repeat `--session` to add
+sessions; with two or more, each session is held out in turn, and with one the
+folds keep each movement's windows together, which is optimistic. The report gives
+moving recall and false alarms while still for both the classifier and the pod
+score, plus per-class recall for the classifier. The pod score is one value per
+minute, so it is scored on the minute around each window and cannot tell movement
+types apart. Cued movements are deliberate, not natural sleep movements.
+
 ## Use a trained model on the pod
 
 Training never uploads or activates a model. These steps change what the pod shows,
