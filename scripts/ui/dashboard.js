@@ -1637,6 +1637,8 @@ function isoWeek(group) {
 function weeklyNights(sessions, keys) {
   const groups = new Map();
   for (const session of sessions) {
+    // Older saved runs can lack a night group; they cannot be placed in a week.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(session.group ?? '')) continue;
     if (!groups.has(session.group)) groups.set(session.group, []);
     groups.get(session.group).push(...session.rows);
   }
