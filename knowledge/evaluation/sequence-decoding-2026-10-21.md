@@ -4,16 +4,16 @@ title: "Sequence decoding: 2026-10-21"
 description: "Dropping isolated-epoch smoothing helps the deployed-style forest; Viterbi adds a small gain mainly on the balanced forest. Neither is demonstrated."
 status: "draft"
 generated: {"by": "claude/opus-5.5", "at": "2026-10-22T02:15:00+00:00"}
-sources: [{"resource": "Local runs seqdecode-20261022T020904Z (final) and seqdecode-20261022T014842Z (superseded): report.json and protocol.json under ignored data/runs/, from scripts/sequence-decoding.py", "title": "Decoder ablation report"}, {"resource": "Local training workspace run 20261021T055014537710Z: features.json under ignored data/runs/", "title": "Labeled feature epochs"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]
+sources: [{"resource": "Local runs seqdecode-20261022T021425Z (final) and seqdecode-20261022T014842Z (superseded): report.json and protocol.json under ignored data/runs/, from scripts/sequence-decoding.py", "title": "Decoder ablation report"}, {"resource": "Local training workspace run 20261021T055014537710Z: features.json under ignored data/runs/", "title": "Labeled feature epochs"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]
 ---
 
 # Sequence decoding: 2026-10-21
 
-On held-out nights, replacing the production isolated-epoch smoothing with plain argmax or HMM/Viterbi decoding raised macro F1 by about 0.02 for the oversampled depth-8 forest. Viterbi's extra transition structure added little there; on the class-balanced forest Viterbi gained about 0.02 where argmax gained nothing, with an interval touching zero. One participant; descriptive, not a recommendation to change production.
+On held-out nights, replacing the production isolated-epoch smoothing with plain argmax or HMM/Viterbi decoding raised macro F1 by about 0.02 for the oversampled depth-8 forest. Viterbi's extra transition structure added little there; on the class-balanced forest Viterbi gained about 0.02 where argmax gained nothing, with an interval touching zero. One participant; descriptive, not a recommendation to change production. The title date is the local (America/Los_Angeles) analysis date; run IDs are UTC timestamps, so they read 2026-10-22.
 
 ## Measured: decoder ablation
 
-`scripts/sequence-decoding.py`, 10 night groups, 693 labeled epochs, leave-one-night-group-out. Each outer fold fits each forest once; every decoder scores that same forest. Emissions are emission weight × log forest probability, without prior division, because both forests are fitted on class-balanced data. Transitions come only from consecutive labeled training-fold Watch epochs; the training label prior sets the first epoch only. Smoothing α ∈ {0.5, 2} and emission weight ∈ {0.5, 1, 2, 4, 8, 16, 32} were chosen by inner 3-fold GroupKFold on training nights. Rows are Watch labels; cells count epochs.
+`scripts/sequence-decoding.py`, 10 night groups, 693 labeled epochs, leave-one-night-group-out. Each outer fold fits each forest once; every decoder scores that same forest. Emissions are emission weight × log forest probability, without prior division, because both forests are fitted on class-balanced data. Transitions come only from consecutive labeled training-fold Watch epochs; the training label prior sets the first epoch only. Forbidden deep↔REM transitions have exactly zero probability. Smoothing α ∈ {0.5, 2} and emission weight ∈ {0.5, 1, 2, 4, 8, 16, 32} were chosen by inner 3-fold GroupKFold on training nights. Rows are Watch labels; cells count epochs.
 
 | Forest / decoder | macro F1 | κ | light | deep | REM | light→REM | light→deep | REM→light | deep→light | direct deep↔REM | Δ macro F1 per night (95% night bootstrap) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |

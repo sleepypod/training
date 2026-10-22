@@ -39,11 +39,7 @@ def transitions(nights, alpha, forbid_deep_rem=False):
                 counts[a['y'], b['y']] += 1
     if forbid_deep_rem:
         counts[DEEP, REM] = counts[REM, DEEP] = 0
-    matrix = counts / counts.sum(axis=1, keepdims=True)
-    if forbid_deep_rem:
-        matrix[DEEP, REM] = matrix[REM, DEEP] = EPSILON
-        matrix /= matrix.sum(axis=1, keepdims=True)
-    return matrix
+    return counts / counts.sum(axis=1, keepdims=True)
 
 
 def prior(nights, alpha):
@@ -88,7 +84,9 @@ def decode(name, clf, night, ruleset, params, train):
     # rebalance a second time. The label prior is used only for the first epoch.
     emissions = params['weight'] * np.log(proba + EPSILON)
     matrix = transitions(train, params['alpha'], forbid_deep_rem=name == 'viterbi_no_deep_rem')
-    return viterbi(emissions, np.log(matrix), np.log(prior(train, params['alpha'])))
+    with np.errstate(divide='ignore'):  # forbidden transitions are exactly zero: log gives -inf
+        log_matrix = np.log(matrix)
+    return viterbi(emissions, log_matrix, np.log(prior(train, params['alpha'])))
 
 
 def score(name, clf, nights, ruleset, params, train):

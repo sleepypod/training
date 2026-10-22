@@ -67,8 +67,15 @@ class SequenceDecodingTests(unittest.TestCase):
     def test_forbidden_deep_rem_never_decodes_directly(self):
         train = [session([2, 3, 2, 3, 2, 3, 1, 1])]
         matrix = m.transitions(train, alpha=1, forbid_deep_rem=True)
-        self.assertLess(matrix[m.DEEP, m.REM], 1e-5)
-        self.assertLess(matrix[m.REM, m.DEEP], 1e-5)
+        self.assertEqual(matrix[m.DEEP, m.REM], 0)
+        self.assertEqual(matrix[m.REM, m.DEEP], 0)
+        class Certain:
+            classes_ = np.array([0, 1, 2, 3])
+            def predict_proba(self, xs):
+                return np.array([[0, 0, 1, 0], [0, 0, 0, 1]] * (len(xs) // 2))
+        # Even certain, heavily weighted emissions cannot force a forbidden jump.
+        forced = m.decode('viterbi_no_deep_rem', Certain(), session([None] * 6), None, {'alpha': 1, 'weight': 32.0}, train)
+        self.assertEqual(m.direct_deep_rem([forced]), 0)
         emissions = np.log(np.array([[.01, .01, .97, .01], [.01, .01, .01, .97]] * 4))
         path = m.viterbi(emissions, np.log(matrix), np.log(np.full(4, .25)))
         self.assertEqual(m.direct_deep_rem([path]), 0)
