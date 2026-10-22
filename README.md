@@ -141,7 +141,7 @@ state and no known live process are labeled interrupted, without editing their
 saved state. Runs with a report but no pipeline status are archived, not assumed
 to have passed parity.
 
-The design is organized around a run sidebar, sticky pipeline header, and four tabs:
+The design is organized around a run sidebar, sticky pipeline header, and five tabs:
 
 - **Overview:** held-out scores, review checks, four-lane stage comparison,
   small hypnograms for every night, sleep architecture, fold results, per-stage
@@ -149,6 +149,10 @@ The design is organized around a run sidebar, sticky pipeline header, and four t
 - **Nights:** Pod / candidate / baseline / Watch aligned on one axis, a night
   picker, candidate-vs-Watch or candidate-vs-Pod disagreement navigation,
   per-epoch inputs, exact stages, and matched stage-duration comparisons.
+- **Weeks:** stage minutes per night grouped into ISO weeks by local night date,
+  a source selector, and weekly averages per source with differences from Watch.
+  Each night counts only intervals shared by every displayed source; nights
+  without shared data are gaps, never zero.
 - **Data:** intake, label coverage, per-night balance, feature histograms and
   descriptive distribution comparisons. Missing raw sensor readings cannot be
   inferred from finite feature values because some features use fallback values.
