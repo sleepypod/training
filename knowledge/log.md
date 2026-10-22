@@ -1,5 +1,9 @@
 # Knowledge update log
 
+## 2026-10-22
+
+- **Creation**: Captured the [piezo bandwidth gate](evaluation/piezo-bandwidth-2026-10-22.md) result: both snore bands passed in one scripted session with imitated snoring; cross-mattress transfer and knock over-counting noted. No model activation.
+
 ## 2026-10-21
 
 - **Update**: Captured [light-sleep confusion](evaluation/light-sleep-confusion-2026-10-21.md): held-out confusion, feature separation, Watch transition structure and ranked experiments. Linked from [research priorities](operations/research-priorities.md) and the overnight capture plan. No model activation.
