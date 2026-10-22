@@ -32,29 +32,31 @@ def _argument(read, additional):
     return int.from_bytes(raw, 'big')
 
 
+def _exact(f, size):
+    """Read exactly size bytes; a short read is the still-growing tail of a live file."""
+    raw = f.read(size)
+    if len(raw) < size:
+        raise EOFError
+    return raw
+
+
 def read_outer(f):
     """Return inner bytes of the next outer record, None for an empty marker; EOFError at end."""
-    head = f.read(1)
-    if not head:
-        raise EOFError
-    if head[0] != 0xa2 or f.read(4) != b'\x63seq':
+    if _exact(f, 1)[0] != 0xa2 or _exact(f, 4) != b'\x63seq':
         raise ValueError('Expected outer {seq, data} map')
-    seq = f.read(1)
-    if not seq or seq[0] >> 5 != 0:
+    seq = _exact(f, 1)[0]
+    if seq >> 5 != 0:
         raise ValueError('seq must be an unsigned int')
-    _argument(f.read, seq[0] & 31)
-    if f.read(5) != b'\x64data':
+    _argument(f.read, seq & 31)
+    if _exact(f, 5) != b'\x64data':
         raise ValueError('Expected data key')
-    kind = f.read(1)
-    if not kind or kind[0] >> 5 != 2:
+    kind = _exact(f, 1)[0]
+    if kind >> 5 != 2:
         raise ValueError('data must be a byte string')
-    length = _argument(f.read, kind[0] & 31)
+    length = _argument(f.read, kind & 31)
     if length > MAX_DATA:
         raise ValueError('Implausibly large data field')
-    data = f.read(length)
-    if len(data) < length:
-        raise EOFError
-    return data or None
+    return _exact(f, length) or None
 
 
 class _Inner:
@@ -155,11 +157,6 @@ def records(raw_bytes):
                     yield rec, None
         except ValueError as error:
             yield None, str(error)
-
-
-def file_bytes(path):
-    raw = Path(path).read_bytes()
-    return gzip.decompress(raw) if str(path).endswith('.gz') else raw
 
 
 def export_files(tar_path):

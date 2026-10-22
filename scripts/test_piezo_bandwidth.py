@@ -1,10 +1,16 @@
+import contextlib
 import gzip
+import http.server
 import io
+import json
+import threading
 import struct
 import tarfile
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -118,6 +124,43 @@ class RawPiezoTests(unittest.TestCase):
             files = list(rp.export_files(path))
         self.assertEqual([(n, r) for n, _, r in files], [('A.RAW', raw), ('B.RAW.gz', raw)])
 
+    def test_inner_cbor_covers_every_supported_major_type(self):
+        payload = (b'\xa9' + cbor('neg') + cbor(-5) + cbor('arr') + cbor([1, 'a']) + cbor('iarr') + b'\x9f\x01\x02\xff'
+                   + cbor('ibytes') + b'\x5f\x42ab\x41c\xff' + cbor('itext') + b'\x7f\x61x\x61y\xff'
+                   + cbor('tag') + b'\xc1\x1a\x00\x00\x00\x07' + cbor('f32') + b'\xfa\x3f\xc0\x00\x00'
+                   + cbor('flags') + b'\x84\xf5\xf4\xf6' + cbor(2.5) + cbor('big') + b'\x1b' + (2 ** 40).to_bytes(8, 'big'))
+        (rec, error), = list(rp.records(outer(1, payload)))
+        self.assertIsNone(error)
+        self.assertEqual(rec, {'neg': -5, 'arr': [1, 'a'], 'iarr': [1, 2], 'ibytes': b'abc', 'itext': 'xy',
+                               'tag': 7, 'f32': 1.5, 'flags': [True, False, None, 2.5], 'big': 2 ** 40})
+
+    def test_inner_decode_errors_are_reported(self):
+        cases = {b'\xa1': 'Truncated', b'\x9f\x01': 'indefinite', b'\xf8\x20': 'simple', b'\x1c': 'length',
+                 b'\x81' * 18 + b'\x01': 'deep'}
+        for payload, message in cases.items():
+            (rec, error), = [item for item in rp.records(outer(1, payload)) if item[1]]
+            self.assertIsNone(rec)
+            self.assertIn(message, error)
+
+    def test_outer_record_contract_violations(self):
+        good = outer(1, cbor({'type': 'x'}))
+        for raw, message in ((b'\xa2\x63seq\x41', 'unsigned'), (good[:10] + b'\x64date' + good[15:], 'data key'),
+                             (good[:15] + b'\x60', 'byte string'), (good[:15] + b'\x5a\xff\xff\xff\xff', 'large'),
+                             (b'\xa2\x63seq\x1c', 'length')):
+            (rec, error), = list(rp.records(raw))
+            self.assertIn(message, error)
+        for truncated in (b'\xa2\x63seq', b'\xa2\x63seq\x1a\x00', good[:16]):
+            self.assertEqual(list(rp.records(truncated)), [])
+        self.assertEqual(rp.samples(None).size, 0)
+        self.assertEqual(rp.samples(b'\x01\x00\x00\x00\x02').tolist(), [1.0])
+
+    def test_records_without_numeric_ts_and_empty_ranges_are_ignored(self):
+        seconds, _ = rp.piezo_seconds([{'type': 'piezo-dual', 'ts': 'x'}, {'type': 'log', 'ts': 1}])
+        self.assertEqual(seconds, {})
+        self.assertEqual(rp.segments({}, 'left1', 5, 5), ([], 0, 0))
+        all_lost = np.full(10, np.nan)
+        self.assertTrue(np.isnan(rp.fill_short_gaps(all_lost)).all())
+
 
 class BandwidthGateTests(unittest.TestCase):
     def test_tones_and_knocks_pass_both_bands(self):
@@ -139,6 +182,45 @@ class BandwidthGateTests(unittest.TestCase):
         self.assertEqual(report['outcome'], 'neither')
         self.assertFalse(report['knockPassed'])
 
+    def test_high_band_alone_and_missing_knock_step(self):
+        recs, steps = synthetic_session(low=False)
+        report = pb.analyze_steps(recs, [s for s in steps if s['name'] != 'knock_foot'], 'left')
+        self.assertEqual(report['outcome'], 'high-band-only')
+        self.assertEqual(set(report['knockEvents']), {'knock_head'})
+
+    def test_short_or_missing_data_yields_no_spectrum_and_bad_spectra_raise(self):
+        self.assertEqual(pb.psd([np.zeros(pb.NPERSEG - 1)]), (None, None, 0))
+        recs, steps = synthetic_session()
+        report = pb.analyze_steps([r for r in recs if r['ts'] < steps[1]['startMs'] // 1000], steps, 'left')
+        self.assertEqual(report['steps']['occupied_hum']['channels']['left1']['welchWindows'], 0)
+        self.assertEqual(report['outcome'], 'incomplete')
+        with patch.object(pb, 'welch', return_value=(np.arange(3), np.array([1, np.nan, 1]))), self.assertRaisesRegex(ValueError, 'Non-finite'):
+            pb.psd([np.zeros(pb.NPERSEG)])
+
+    def test_corrupt_files_are_listed_as_decode_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'export.tar.gz'
+            path.write_bytes(export_tarball([{'type': 'log', 'ts': 1}]))
+            with patch.object(pb.raw_piezo, 'records', return_value=iter([(None, 'Expected data key')])):
+                recs, errors, files = pb.load_export(path)
+        self.assertEqual(recs, [])
+        self.assertEqual(errors, [{'file': '00000001.RAW.gz', 'error': 'Expected data key'}])
+        self.assertEqual(files[0]['records'], 0)
+
+    def test_clock_offset_without_date_header_is_unknown(self):
+        class Response:
+            headers = {}
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+        class Opener:
+            def open(self, url, timeout):
+                return Response()
+        with patch.object(pb.urllib.request, 'build_opener', return_value=Opener()):
+            self.assertIsNone(pb.pod_clock_offset_ms('127.0.0.1'))
+        self.assertAlmostEqual(pb.now_ms() / 1000, pb.time.time(), delta=1)
+
     def test_missing_reference_step_is_incomplete_not_failed(self):
         recs, steps = synthetic_session()
         report = pb.analyze_steps(recs, [s for s in steps if s['name'] != 'occupied_still'], 'left')
@@ -152,6 +234,106 @@ class BandwidthGateTests(unittest.TestCase):
         self.assertEqual(report['storage']['archiveGzipRatio'], 0.6)
         self.assertEqual(report['hours'][0]['piezoSeconds'], 420)
         self.assertEqual(report['hours'][1]['piezoSeconds'], 0)
+
+
+def export_tarball(recs):
+    """An /api/export/archive-shaped tarball holding one gzipped RAW file."""
+    raw = b''.join(outer(i, cbor(rec)) for i, rec in enumerate(recs))
+    body = gzip.compress(raw)
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w:gz') as tar:
+        info = tarfile.TarInfo('./raw/00000001.RAW.gz')
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+    return buffer.getvalue()
+
+
+@contextlib.contextmanager
+def fake_pod(tarball):
+    """Local HTTP server answering the two GET routes the gate uses."""
+    requests = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            body = tarball if self.path.startswith('/api/export/archive') else b'[]'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f'127.0.0.1:{server.server_address[1]}', requests
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class CommandTests(unittest.TestCase):
+    def run_main(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            pb.main(list(argv))
+        return out.getvalue()
+
+    def test_session_records_every_step_window_and_refuses_to_overwrite(self):
+        clock = iter(range(0, 10_000_000, 30_000))
+        with tempfile.TemporaryDirectory() as d, fake_pod(b'') as (pod, _), \
+                patch('builtins.input', return_value=''), patch.object(pb.time, 'sleep'), \
+                patch.object(pb, 'now_ms', side_effect=lambda: next(clock)):
+            path = Path(d) / 'steps.json'
+            text = self.run_main('session', '--side', 'left', '--pod', pod, '--out', str(path), '--step-seconds', '60')
+            doc = json.loads(path.read_text())
+            with self.assertRaises(SystemExit):
+                self.run_main('session', '--side', 'left', '--out', str(path))
+        self.assertEqual([s['name'] for s in doc['steps']], [name for name, _ in pb.STEPS])
+        self.assertTrue(all(s['endMs'] - s['startMs'] >= 60_000 for s in doc['steps']))
+        self.assertIsNotNone(doc['podClockOffsetMs']['start'])
+        self.assertIn('Saved', text)
+
+    def test_analyze_fetches_from_pod_and_reanalyses_a_saved_export(self):
+        recs, steps = synthetic_session()
+        tarball = export_tarball(recs)
+        with tempfile.TemporaryDirectory() as d, fake_pod(tarball) as (pod, requests):
+            steps_path = Path(d) / 'steps.json'
+            steps_path.write_text(json.dumps({'side': 'left', 'steps': steps}))
+            text = self.run_main('analyze', '--steps', str(steps_path), '--pod', pod, '--out', str(Path(d) / 'a'))
+            report = json.loads((Path(d) / 'a/report.json').read_text())
+            again = self.run_main('analyze', '--steps', str(steps_path), '--export', str(Path(d) / 'a/export.tar.gz'),
+                                  '--out', str(Path(d) / 'b'))
+            with self.assertRaises(SystemExit):
+                self.run_main('analyze', '--steps', str(steps_path), '--out', str(Path(d) / 'c'))
+            with self.assertRaises(SystemExit):
+                self.run_main('analyze', '--steps', str(steps_path), '--export', str(Path(d) / 'a/export.tar.gz'), '--out', str(Path(d) / 'a'))
+        self.assertIn('startTs=', requests[0])
+        self.assertIn('include=raw', requests[0])
+        self.assertEqual(report['outcome'], 'both-bands')
+        self.assertEqual(report['source']['bytes'], len(tarball))
+        self.assertIn('Outcome: both-bands', text)
+        self.assertIn('Outcome: both-bands', again)
+
+    def test_night_command_and_time_parsing(self):
+        recs, steps = synthetic_session()
+        start = steps[0]['startMs'] // 1000
+        with tempfile.TemporaryDirectory() as d:
+            export = Path(d) / 'export.tar.gz'
+            export.write_bytes(export_tarball(recs))
+            text = self.run_main('night', '--start', str(start), '--end', str(start + 420), '--export', str(export), '--out', str(Path(d) / 'n'))
+            report = json.loads((Path(d) / 'n/report.json').read_text())
+            with self.assertRaises(SystemExit):
+                self.run_main('night', '--start', str(start), '--end', str(start), '--export', str(export), '--out', str(Path(d) / 'm'))
+        self.assertEqual(report['coverage'], 1.0)
+        self.assertIn('archive gzip ratio', text)
+        self.assertEqual(pb.parse_time('2026-10-22T23:00-07:00'), int(datetime(2026, 10, 23, 6, tzinfo=timezone.utc).timestamp()))
+        self.assertEqual(pb.parse_time('1793253600'), 1793253600)
+        with self.assertRaises(SystemExit):
+            pb.parse_time('2026-10-22T23:00')
 
 
 if __name__ == '__main__':

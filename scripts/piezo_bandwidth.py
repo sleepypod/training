@@ -106,9 +106,9 @@ def psd(segments):
     """Window-weighted mean Welch PSD over segments of at least one window."""
     total, windows, freqs = None, 0, None
     for segment in segments:
-        n = (len(segment) - NPERSEG) // (NPERSEG // 2) + 1
-        if len(segment) < NPERSEG or n < 1:
+        if len(segment) < NPERSEG:
             continue
+        n = (len(segment) - NPERSEG) // (NPERSEG // 2) + 1
         # numpy 2.x on macOS Accelerate raises spurious FP warnings from any matmul; check the result instead.
         with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
             freqs, p = welch(segment, fs=FS, nperseg=NPERSEG, detrend='linear')
