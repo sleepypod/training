@@ -1,6 +1,6 @@
 # Overnight motion, snoring, and piezo comparison — implementation plan
 
-Status: proposed implementation plan, 2026-10-21. Capture and model experiments are not implemented. Keep this work separate from the existing core chart/model PR, which remains awaiting feedback.
+Status: proposed implementation plan, 2026-10-21; revised the same day to gate on piezo bandwidth, fix storage, clock-sync, control and validation protocols, and defer Watch motion. Capture and model experiments are not implemented. Keep this work separate from the existing core chart/model PR, which remains awaiting feedback.
 
 Companion specification: [capture and training contract](overnight-capture.md).
 
@@ -19,6 +19,24 @@ From [light-sleep confusion, 2026-10-21](../knowledge/evaluation/light-sleep-con
 - Snoring frequency is reported to differ by sleep stage in the literature. Whether pod-derived snore features help staging is a hypothesis to test under section 8, on the same held-out nights, reporting the light/REM and light/deep confusion cells, not only κ.
 - Sequence decoding, context features and partial class weighting need no new capture. Run them on existing data in parallel with this plan so capture-derived features are compared against the strongest pod-only baseline.
 
+## 0. Piezo bandwidth gate
+
+Run this before building iPhone capture or the dashboard. The pod samples each piezo channel at 500 Hz (`SAMPLE_RATE` in core `modules/piezo-processor/main.py`), so the 16–30 Hz and 60–100 Hz bands sit below the 250 Hz Nyquist limit. Front-end filtering, ADC resolution and mattress coupling may still remove them; sampling rate alone does not establish bandwidth.
+
+- Dump both raw channels for one full occupied night through the existing raw-data path, plus a short scripted session on the same bed.
+- Scripted session, each step 60 s and timestamped by hand: empty bed with pump off (or at its quietest), empty bed with pump running, occupant lying still, occupant humming low and sustained with head on the pillow, occupant imitating snoring, three knocks on the bed frame at the head and at the foot.
+- Compute Welch spectra per channel and step. Report band power in 16–30 Hz and 60–100 Hz relative to the empty-bed, pump-off baseline, the noise-floor slope above 100 Hz, clipping counts and lost-sample counts.
+- Pass bar, fixed before the session: hum or imitated snoring raises band power at least 6 dB above baseline on the occupant's side in a band, and knocks appear as transients in both channels. A band that fails is treated as empty.
+- Use the overnight dump to measure the real compression ratio and pod write load for section 3.
+
+Outcomes:
+
+- Both bands pass: proceed in the delivery order below.
+- Only 16–30 Hz passes: restrict section 4 band rows and section 5 features to the low band; drop 60–100 Hz claims.
+- Neither passes: stop pod-side snore detection. Sections 5 and 7 drop their piezo arms; iPhone snore events remain a standalone summary. Raw piezo capture continues only for the staging research objective (breathing irregularity sits well below 16 Hz).
+
+Acceptance: committed aggregate report (spectra summaries, not raw samples) with the pass bar written before the session; raw dumps stay under ignored data/.
+
 ## 1. Shared recording contract
 
 - Assign session IDs, participant aliases, bed-side mappings, and device metadata.
@@ -28,18 +46,35 @@ From [light-sleep confusion, 2026-10-21](../knowledge/evaluation/light-sleep-con
 - Missing data remains missing, not zero movement or no snoring.
 - Version schemas and feature definitions. Retain source provenance and chunk hashes.
 
-Acceptance: synthetic boundary, unit-conversion, DST, clock-jump, gap and duplicate-transfer tests; reproduce existing training epoch starts without changing current feature values.
+Clock sync uses a physical event, not only network time:
+
+- At session start and end, knock three times on the bed frame within about 30 cm of the phone, about one second apart.
+- The iPhone detects knock onsets in its in-memory audio envelope and persists only the onset timestamps; no audio is kept. The pod pipeline detects the same transients in both piezo channels.
+- Offset is the median of matched onset differences; drift is the change from start to end, interpolated linearly across the night. Uncertainty is the spread of the three matched pairs plus the residual after drift correction.
+- This measures the real sensor-to-sensor offset including audio and piezo pipeline delay, which a network time exchange cannot. Network offset estimates are still logged as a coarse prior and as a fallback when knocks are missed.
+- A session with no matched knocks at either end is flagged unsynchronized and excluded from event-level comparison.
+
+Acceptance: synthetic boundary, unit-conversion, DST, clock-jump, gap and duplicate-transfer tests; reproduce existing training epoch starts without changing current feature values; synthetic knock streams with injected offset and drift recover both within one piezo sample.
 
 ## 2. Opt-in iPhone snoring analysis
 
 - Add Start/Stop overnight capture, microphone permission, recording status and morning summary.
 - Process microphone buffers locally with Sound Analysis/Core ML.
-- Persist only candidate-snore timestamps, confidence, detector version and recording coverage.
+- Persist only candidate-snore timestamps, confidence, detector version, knock-onset timestamps and recording coverage.
 - Never write or upload raw audio, transcripts or audio embeddings. No audio-clip retention option in this implementation.
 - Handle screen locking, calls, alarms, audio-route changes, interruptions and process termination.
-- Evaluate available classifiers before selecting a baseline. Loudness alone is not snore detection; classifier confidence is not automatically a calibrated probability.
+- Start with Apple's built-in classifier (`SNClassifySoundRequest(classifierIdentifier: .version1)`). On macOS 26.7.1 its 303 known classifications include `snoring`, `breathing`, `speech` and `mechanical_fan`, with a 3 s window and 0.5 overlap. Confirm the same label on the target iOS version from `knownClassifications` at runtime and record the OS version with each detector version. Search for or train another classifier only if the calibration set below shows the built-in one is inadequate.
+- Loudness alone is not snore detection; classifier confidence is not automatically a calibrated probability.
 
-Acceptance: physical-iPhone overnight testing; explicit denied/revoked permission and stop tests; verify storage, logging and network paths contain no audio; quantify battery use and capture coverage.
+Validation set:
+
+- Product capture keeps no audio, so it cannot measure detector precision in a real bedroom. Add a separate, explicitly consented calibration session outside the product capture flow.
+- Script: imitated snoring at several loudness levels, normal speech, a fan, the pod pump, bedding movement, and silence, in the actual bedroom with the phone in its overnight position. Include partner snoring when a consenting partner is available.
+- Audio is held only on the device running the session, labeled in segments, and deleted after labeling; keep only the labels, segment times and detector outputs. Verify deletion.
+- Report precision, recall and false positives per hour of non-snore audio at the chosen threshold. Use the same session to pick that threshold before any piezo comparison.
+- This also covers validation, not just retraining: the consented-dataset rule in section 5 applies to both.
+
+Acceptance: physical-iPhone overnight testing; explicit denied/revoked permission and stop tests; verify storage, logging and network paths contain no audio; quantify battery use and capture coverage; calibration-session report with deletion verified.
 
 ## 3. Synchronized raw pod piezo
 
@@ -47,12 +82,62 @@ Acceptance: physical-iPhone overnight testing; explicit denied/revoked permissio
 - Preserve both channels at their native sampling rate before heart-rate or breathing filtering.
 - Add bounded sessions, storage limits, checksums, durable acknowledgments and resumable retrieval.
 - Record occupancy, movement, pump activity and available hardware-state signals to investigate interference.
-- Measure phone/pod clock alignment and retain uncertainty; never use transfer time as sample time.
+- Align with the knock protocol in section 1 and retain uncertainty; never use transfer time as sample time.
 - Keep raw recordings and derived private artifacts under ignored data/ directories.
 
-Acceptance: recover from transfer interruption without duplication or silent loss; verify channel identities, sample timing, capacity limits and preservation of existing sensor processing.
+Storage budget, decided before anything writes to pod storage:
 
-## 4. Watch motion capture
+- Rate: 2 channels × 500 Hz × 4 bytes (int32) = 4 kB/s, 14.4 MB/hour, about 115 MB per 8-hour night uncompressed.
+- Compression: write closed chunks (for example 10 minutes) with lossless delta encoding plus a general-purpose compressor; record the measured ratio from the section 0 night. Never apply lossy compression to research capture.
+- Pod-side retention: a ring buffer capped at two nights of uncompressed-equivalent data (about 250 MB) and below a free-space floor measured on the pod's data partition before the cap is set. Capture refuses to start, rather than evicting unretrieved chunks, when the floor would be crossed.
+- Deletion: a chunk is deleted from the pod only after the Mac training workspace acknowledges it with a matching checksum.
+- Permanent home: the Mac training workspace under ignored data/raw/, never Git and never the phone. Retention there is per-session and user-deletable; derived aggregates are what get committed after review.
+
+Control nights:
+
+- Empty bed with the pump running through its normal overnight schedule, at least one night.
+- Occupied night with no snoring according to the iPhone detector and the sleeper, at least one night.
+- Use them to subtract pump and occupancy band energy from snore-window comparisons and to set false-positive baselines for section 5. Recompute them after hardware or firmware changes.
+
+Acceptance: recover from transfer interruption without duplication or silent loss; verify channel identities, sample timing, capacity limits, refusal at the free-space floor, ack-gated deletion and preservation of existing sensor processing.
+
+## 4. Comparison workspace
+
+Extend the training dashboard with an aligned timeline containing:
+
+- iPhone candidate-snore events and confidence.
+- Left/right piezo waveforms and spectrograms.
+- Energy in the frequency bands that passed section 0, among 16–30 Hz and 60–100 Hz.
+- Pod movement, pump activity and sleep stages; Watch motion once section 6 exists.
+- Capture gaps, knock markers and synchronization uncertainty.
+
+Support zooming into individual events and comparing periods with and without detected snoring. Add review labels for likely snore, movement interference, equipment noise and uncertain. Preserve label origin and reviewer metadata. Without retained audio, retrospective audio listening is unavailable; waveform review alone is not ground-truth verification.
+
+Exit test for milestone 2, fixed and committed before looking at captured nights:
+
+- On held-out nights, band energy separates iPhone-flagged snore windows from matched quiet windows with AUC of at least 0.7, and the lower bound of a 95% bootstrap interval resampled by night stays above 0.5.
+- Matched quiet windows: same night and side, occupied, no pod movement or pump activity, within 30 minutes of the flagged window, with recording coverage on both sensors.
+- Subtract control-night baselines from section 3 before scoring. Use the detector threshold fixed by the section 2 calibration session.
+- Minimum evidence: at least 5 held-out nights with at least 20 flagged windows in total; fewer means the test is not yet run, not passed.
+- Pass: proceed to section 5. Fail: record the result and stop pod-side snore detection as in the section 0 "neither passes" outcome.
+
+Acceptance: synthetic synchronized events line up across all rows; gaps remain visible; exported windows reproduce the viewed intervals; no private data enters public screenshots or CI; the exit test result is reported against its pre-committed bar.
+
+## 5. Snoring model experiments
+
+- Begin with a spectral-feature baseline inspired by the Emfit research, then compare a small spectrogram-based neural network.
+- Use only the bands that passed section 0 and only after the section 4 exit test passes.
+- Evaluate piezo-only, audio-only and combined-sensor approaches separately.
+- Treat iPhone predictions as provisional labels. Measure disagreement and label quality; the section 2 calibration set bounds detector precision but does not make agreement accuracy.
+- Hold out whole nights and participants. Keep both sides of one recording in the same split.
+- Report precision, recall, false positives per hour, coverage and performance during movement/pump activity, with control-night false-positive rates alongside. Report metrics against provisional labels as such.
+- Retraining or validating the audio classifier requires an independently consented, labeled audio dataset, outside this no-audio-retention product capture flow.
+
+Acceptance: reproducible datasets/manifests and runs, leakage checks, held-out evaluation and an explicit account of label limitations. Do not transfer published Emfit accuracy claims to sleepypod.
+
+## 6. Watch motion capture (deferred)
+
+Deferred until after section 5. For snoring, pod movement already covers interference; for staging, Watch motion leaks the label. Build it only if section 5 shows a specific need that pod movement cannot meet, or an independent stage label source appears.
 
 - Create a watchOS companion target; none was found in the inspected iOS project.
 - Prototype CMSensorRecorder on physical hardware before committing to unattended overnight behavior.
@@ -60,33 +145,7 @@ Acceptance: recover from transfer interruption without duplication or silent los
 - Preserve timestamped acceleration, units, sensor orientation metadata where available and coverage.
 - Derive separately versioned motion features; never substitute wrist acceleration for existing pod movement features.
 
-Acceptance: measure overnight availability and battery use; test app suspension, incomplete transfers and recovery. Automatic starts and live streaming are separate follow-up feasibility work.
-
-## 5. Comparison workspace
-
-Extend the training dashboard with an aligned timeline containing:
-
-- iPhone candidate-snore events and confidence.
-- Left/right piezo waveforms and spectrograms.
-- Energy in research-inspired frequency bands, including 16–30 Hz and 60–100 Hz.
-- Watch motion, pod movement and sleep stages.
-- Capture gaps and synchronization uncertainty.
-
-Support zooming into individual events and comparing periods with and without detected snoring. Add review labels for likely snore, movement interference, equipment noise and uncertain. Preserve label origin and reviewer metadata. Without retained audio, retrospective audio listening is unavailable; waveform review alone is not ground-truth verification.
-
-Acceptance: synthetic synchronized events line up across all rows; gaps remain visible; exported windows reproduce the viewed intervals; no private data enters public screenshots or CI.
-
-## 6. Snoring model experiments
-
-- Begin with a spectral-feature baseline inspired by the Emfit research, then compare a small spectrogram-based neural network.
-- First verify that pod hardware preserves useful signal in the proposed frequency bands; sampling rate alone does not establish sensor bandwidth or signal quality.
-- Evaluate piezo-only, audio-only and combined-sensor approaches separately.
-- Treat iPhone predictions as provisional labels. Measure disagreement and label quality; independent validation is needed before interpreting agreement as accuracy.
-- Hold out whole nights and participants. Keep both sides of one recording in the same split.
-- Report precision, recall, false positives per hour, coverage and performance during movement/pump activity. Report metrics against provisional labels as such.
-- Retraining the audio classifier requires an independently consented, labeled audio dataset, outside this no-audio-retention product capture flow.
-
-Acceptance: reproducible datasets/manifests and runs, leakage checks, held-out evaluation and an explicit account of label limitations. Do not transfer published Emfit accuracy claims to sleepypod.
+Acceptance: a written justification from section 5 results before starting; measure overnight availability and battery use; test app suspension, incomplete transfers and recovery. Automatic starts and live streaming are separate follow-up feasibility work.
 
 ## 7. Side attribution
 
@@ -112,12 +171,15 @@ Acceptance: training/inference parity, bounded resource use, missing-input behav
 
 ## Delivery order
 
-1. Contract and iPhone/pod capture.
-2. Synchronized comparison dashboard — first usable milestone.
-3. Watch motion capture and dashboard integration.
-4. Reproducible snoring model experiments.
+0. Piezo bandwidth gate (section 0) — one night of raw dumps plus the scripted hum and knock session; its outcome can cut later steps.
+1. Contract, knock clock sync, storage budget, iPhone/pod capture, control nights and the iPhone calibration session.
+2. Synchronized comparison dashboard — first usable milestone, finished when the section 4 exit test is run against its pre-committed bar.
+3. Reproducible snoring model experiments, if the exit test passes.
+4. Watch motion capture, only if justified by step 3.
 5. Side-attribution experiments.
 6. Validated model packaging and product integration.
+
+In parallel from the start: sequence decoding, context features and partial class weighting on existing staging data.
 
 The first milestone lets a user record a night and inspect microphone-derived snore events against both raw piezo channels while keeping audio ephemeral on the iPhone. Device validation gates claims of reliable overnight operation.
 
@@ -126,5 +188,6 @@ The first milestone lets a user record a night and inspect microphone-derived sn
 - [Emfit snoring classification using SVM/CNN](https://jperezmacias.github.io/papers/EMBC17_perezmacias.pdf)
 - [Detection and assessment of sleep-disordered breathing with Emfit](https://research.aalto.fi/en/publications/detection-and-assessment-of-sleep-disordered-breathing-with-emfit/)
 - [Apple Sound Analysis](https://developer.apple.com/documentation/soundanalysis)
+- [Apple built-in sound classifier request](https://developer.apple.com/documentation/soundanalysis/snclassifysoundrequest)
 - [Apple sensor recorder](https://developer.apple.com/documentation/coremotion/cmsensorrecorder)
 - [Apple audio recording category](https://developer.apple.com/documentation/avfaudio/avaudiosession/category-swift.struct/record)
