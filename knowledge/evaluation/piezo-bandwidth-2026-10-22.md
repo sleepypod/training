@@ -1,7 +1,7 @@
 ---
 type: "Experimental finding"
 title: "Piezo bandwidth gate: 2026-10-22"
-description: "In one scripted session on one pod, imitated snoring raised raw piezo energy in both snore bands well above the pass bar; real snoring and the full-night dump are not yet covered."
+description: "In one scripted session on one pod, imitated snoring raised raw piezo energy in both snore bands well above the pass bar; a 10-hour night had full coverage at about 13 MB/hour archived. Real snoring is untested."
 status: "draft"
 generated: {"by": "claude/opus-5.5", "at": "2026-10-22T09:40:00+00:00"}
 sources: [{"resource": "Local scripted session data/bandwidth/steps.json and analyze report data/bandwidth/session/report.json (identical to the earlier preview) under ignored data/, from scripts/piezo_bandwidth.py", "title": "Bandwidth gate session and report"}, {"resource": "/evaluation/light-sleep-confusion-2026-10-21.md", "title": "Why raw piezo also matters for staging"}]
@@ -9,7 +9,7 @@ sources: [{"resource": "Local scripted session data/bandwidth/steps.json and ana
 
 # Piezo bandwidth gate: 2026-10-22
 
-The pod's raw piezo channels carry energy in both proposed snore bands. Imitated snoring raised 16–30 Hz by 9.6 dB and 60–100 Hz by 27.5 dB over lying still on the occupant's channel, against a pre-committed bar of 6 dB. Outcome: `both-bands` for the scripted band test of section 0 of the overnight capture plan (`docs/overnight-capture-implementation-plan.md`). Section 0's full occupied-night dump (coverage, compression and write load) is still pending, so section 0 is not yet complete. One participant, one pod, one session, imitated rather than real snoring.
+The pod's raw piezo channels carry energy in both proposed snore bands. Imitated snoring raised 16–30 Hz by 9.6 dB and 60–100 Hz by 27.5 dB over lying still on the occupant's channel, against a pre-committed bar of 6 dB. Outcome: `both-bands` for the scripted band test of section 0 of the overnight capture plan (`docs/overnight-capture-implementation-plan.md`). The full-night dump, the other half of section 0, had complete coverage, so section 0 is complete. One participant, one pod, one session, imitated rather than real snoring.
 
 ## Measured: session
 
@@ -29,6 +29,15 @@ Band power in dB (arbitrary ADC units, Welch, 2 s windows, first 10 s and last 5
 
 Rises over lying still on the occupant channel (`left1`): humming +1.6 dB (16–30 Hz) and +9.5 dB (60–100 Hz); imitated snoring +9.6 dB and +27.5 dB. Both knock steps passed the knock rule on both channels.
 
+## Measured: full night
+
+`scripts/piezo_bandwidth.py night` for 2026-10-21 23:00 to 2026-10-22 09:00 local, pulled at 09:45. The window includes the scripted session.
+
+- Coverage: 36,000 of 36,000 seconds present on both channels; 4 duplicate seconds; no decode errors. Lost samples were 1,266–2,018 per hour per channel, about 0.1% of the 1.8 million samples per channel-hour.
+- Storage: 43 archived files and 2 live files, 188 MB decompressed (about 19 MB/hour for the whole RAW stream, of which piezo samples are 14.4 MB/hour). The archive gzip ratio was 0.67, so the pod writes about 13 MB/hour, roughly 100 MB per 8-hour night, on this 2-channel pod. The download was 127 MB.
+- Pump: the hourly maximum speed was 1,944–2,088 rpm in every hour, so the pump cycled throughout the night with both sides on.
+- Occupancy is visible in band power: `left1` 16–30 Hz hourly median was 70–73 dB from 23:00 to 02:00, close to the empty-bed level in the scripted session, then 79–92 dB from 02:00 onward, after the session participant lay on the left.
+
 ## Observations
 
 - Lying still already raised `left1` 16–30 Hz by about 18 dB over the empty bed, as expected from heartbeat and breathing; this is why the pass bar compares against lying still, not the empty bed.
@@ -45,6 +54,6 @@ Rises over lying still on the occupant channel (`left1`): humming +1.6 dB (16–
 
 ## Limitations
 
-One participant on one pod with two channels; four-channel hardware is untested. One session, imitated snoring and humming only. A cat lay still on the bed during the head-knock step. Band power is in uncalibrated ADC units, so only differences within this session are meaningful. The pass bar was fixed in `PASS_BAR` before the session, but the step timing was driven by chat rather than the scripted prompt.
+One participant on one pod with two channels; four-channel hardware is untested. The night was not labeled for snoring and is not a control night. One session, imitated snoring and humming only. A cat lay still on the bed during the head-knock step. Band power is in uncalibrated ADC units, so only differences within this session are meaningful. The pass bar was fixed in `PASS_BAR` before the session, but the step timing was driven by chat rather than the scripted prompt.
 
 See section 0 of `docs/overnight-capture-implementation-plan.md` and [light-sleep confusion](light-sleep-confusion-2026-10-21.md).

@@ -2,7 +2,7 @@
 
 ## 2026-10-22
 
-- **Creation**: Captured the [piezo bandwidth gate](evaluation/piezo-bandwidth-2026-10-22.md) result: both snore bands passed in one scripted session with imitated snoring; cross-mattress transfer and knock over-counting noted. No model activation.
+- **Creation**: Captured the [piezo bandwidth gate](evaluation/piezo-bandwidth-2026-10-22.md) result: both snore bands passed in one scripted session with imitated snoring; cross-mattress transfer and knock over-counting noted; full-night coverage and archive rate recorded. No model activation.
 
 ## 2026-10-21
 

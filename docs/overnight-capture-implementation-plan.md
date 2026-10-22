@@ -39,7 +39,7 @@ Outcomes:
 
 Acceptance: committed aggregate report (spectra summaries, not raw samples) with the pass bar written before the session; raw dumps stay under ignored data/.
 
-Scripted band test, 2026-10-22: `both-bands` in one scripted session (imitated snoring +9.6 dB at 16–30 Hz and +27.5 dB at 60–100 Hz over lying still); the full-night dump is pending. See [piezo bandwidth gate](../knowledge/evaluation/piezo-bandwidth-2026-10-22.md). Before knocks are used for section 1 clock sync, tighten the knock detector: it counted 50–56 events per step on the occupant's channel for three knocks.
+Scripted band test, 2026-10-22: `both-bands` in one scripted session (imitated snoring +9.6 dB at 16–30 Hz and +27.5 dB at 60–100 Hz over lying still). The 10-hour night that followed had full second coverage, about 0.1% lost samples, and a 0.67 archive gzip ratio, about 13 MB/hour written on this 2-channel pod; section 0 is complete. See [piezo bandwidth gate](../knowledge/evaluation/piezo-bandwidth-2026-10-22.md). Before knocks are used for section 1 clock sync, tighten the knock detector: it counted 50–56 events per step on the occupant's channel for three knocks.
 
 ## 1. Shared recording contract
 
