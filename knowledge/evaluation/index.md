@@ -1,7 +1,7 @@
 # Evaluation
 
 - [Piezo bandwidth gate: 2026-10-22](piezo-bandwidth-2026-10-22.md) — In one scripted session on one pod, imitated snoring raised raw piezo energy in both snore bands well above the pass bar; a 10-hour night had full coverage at about 13 MB/hour archived. Real snoring is untested.
-- [Sequence decoding: 2026-10-21](sequence-decoding-2026-10-21.md) — On 10 nights, dropping smoothing or Viterbi decoding gained about 0.02 macro F1; on 13 nights neither gain held. No decoder beats production smoothing.
+- [Sequence decoding: 2026-10-21](sequence-decoding-2026-10-21.md) — On 10 nights, dropping smoothing or Viterbi decoding gained about 0.02 macro F1; on 13 nights neither gain held, and no decoder showed a statistically supported improvement over production smoothing.
 - [Light-sleep confusion: 2026-10-21](light-sleep-confusion-2026-10-21.md) — In this one-participant evaluation, light is the hub stage that REM and deep collapse into; current features barely separate light from REM.
 - [Retraining findings: 2026-10-20](findings-2026-10-20.md) — Promising regularization results without evidence sufficient for promotion.
 - [Validation protocol](validation-protocol.md) — Separate exploratory tuning from honest held-out evaluation.

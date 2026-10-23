@@ -1,7 +1,7 @@
 ---
 type: "Experimental finding"
 title: "Sequence decoding: 2026-10-21"
-description: "On 10 nights, dropping smoothing or Viterbi decoding gained about 0.02 macro F1; on 13 nights neither gain held. No decoder beats production smoothing."
+description: "On 10 nights, dropping smoothing or Viterbi decoding gained about 0.02 macro F1; on 13 nights neither gain held, and no decoder showed a statistically supported improvement over production smoothing."
 status: "draft"
 generated: {"by": "claude/opus-5.5", "at": "2026-10-23T02:50:00+00:00"}
 sources: [{"resource": "Local run seqdecode-20261022T192528Z-export-1022 (13 nights, same script and grid): report.json under ignored data/runs/", "title": "13-night decoder rerun"}, {"resource": "Local runs seqdecode-20261022T021425Z (final) and seqdecode-20261022T014842Z (superseded): report.json and protocol.json under ignored data/runs/, from scripts/sequence-decoding.py", "title": "Decoder ablation report"}, {"resource": "Local training workspace run 20261021T055014537710Z: features.json under ignored data/runs/", "title": "Labeled feature epochs"}, {"resource": "/evaluation/light-sleep-confusion-2026-10-21.md", "title": "Light-sleep confusion baseline"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]
@@ -9,7 +9,7 @@ sources: [{"resource": "Local run seqdecode-20261022T192528Z-export-1022 (13 nig
 
 # Sequence decoding: 2026-10-21
 
-Update, 13 nights: the gains reported below for 10 nights did not hold. Rerun with the same script and grid on a fresh export covering 13 night groups, no decoder improved per-night macro F1 over production smoothing; every 95% interval includes zero. The original 10-night text follows unchanged for the record. On held-out nights, replacing the production isolated-epoch smoothing with plain argmax or HMM/Viterbi decoding raised macro F1 by about 0.02 for the oversampled depth-8 forest. Viterbi's extra transition structure added little there; on the class-balanced forest Viterbi gained about 0.02 where argmax gained nothing, with an interval touching zero. One participant; descriptive, not a recommendation to change production. The title date is the local (America/Los_Angeles) analysis date; run IDs are UTC timestamps, so they read 2026-10-22.
+Update, 13 nights: the gains reported below for 10 nights did not hold. Rerun with the same script and grid on a fresh export covering 13 night groups, no decoder showed a statistically supported improvement in per-night macro F1 over production smoothing: point estimates ranged from −0.008 to +0.014 and every 95% interval includes zero. The original 10-night text follows unchanged for the record. On held-out nights, replacing the production isolated-epoch smoothing with plain argmax or HMM/Viterbi decoding raised macro F1 by about 0.02 for the oversampled depth-8 forest. Viterbi's extra transition structure added little there; on the class-balanced forest Viterbi gained about 0.02 where argmax gained nothing, with an interval touching zero. One participant; descriptive, not a recommendation to change production. The title date is the local (America/Los_Angeles) analysis date; run IDs are UTC timestamps, so they read 2026-10-22.
 
 ## Measured: decoder ablation
 
