@@ -28,11 +28,14 @@ from sklearn.model_selection import GroupKFold
 
 import piezo_bandwidth as pb
 import raw_piezo as rp
+import watch_motion as wm
+import capture_common as cc
 from fetch_pod import base_url
 from run_history import register_output
 
 FS = 500
 CLASSES = ('still', 'arm', 'leg', 'turn', 'sit')
+WATCH_CLASSES = ('light', 'vigorous')
 MOVING = CLASSES[1:]
 # Seconds after a cue that count as the movement: reaction time plus the movement itself.
 EVENT_SECONDS = {'arm': 4.0, 'leg': 4.0, 'turn': 7.0, 'sit': 9.0}
@@ -192,12 +195,13 @@ def build_windows(recs, session, movement, name):
     other = 'right' if side == 'left' else 'left'
     seconds, _ = rp.piezo_seconds(recs)
     caps = capsense_series(recs)
-    events = event_windows(session)
+    watch = session.get('watchLabels')
+    events = [] if watch is not None else event_windows(session)
     start, end = session_span(session)
     rows, dropped = [], 0
     t = start
     while t + WINDOW_S <= end:
-        cls, index = label_window(t, t + WINDOW_S, events)
+        cls, index = (wm.label_window(t, t + WINDOW_S, watch), None) if watch is not None else label_window(t, t + WINDOW_S, events)
         if cls is not None:
             occ = piezo_slice(seconds, f'{side}1', t, t + WINDOW_S)
             oth = piezo_slice(seconds, f'{other}1', t, t + WINDOW_S)
@@ -207,6 +211,7 @@ def build_windows(recs, session, movement, name):
                 dropped += 1
             else:
                 rows.append({'session': name, 't': round(t, 3), 'label': cls,
+                             'night': session.get('night'), 'watch': watch is not None,
                              'group': f'{name}/event{index}' if index is not None else f'{name}/still{int((t - start) // 10)}',
                              'x': piezo_features(occ) + piezo_features(oth) + cap_occ + cap_oth,
                              'baseline': baseline_score(movement, t + WINDOW_S / 2)})
@@ -229,7 +234,7 @@ def binary_metrics(truth_moving, predicted_moving, labels):
     still = ~truth_moving
     recall = float(predicted_moving[truth_moving].mean()) if truth_moving.any() else None
     fpr = float(predicted_moving[still].mean()) if still.any() else None
-    by_class = {c: float(predicted_moving[labels == c].mean()) for c in CLASSES if (labels == c).any()}
+    by_class = {c: float(predicted_moving[labels == c].mean()) for c in CLASSES + WATCH_CLASSES if (labels == c).any()}
     balanced = None if recall is None or fpr is None else (recall + 1 - fpr) / 2
     return {'windows': int(len(labels)), 'movingRecall': recall, 'stillFalseAlarm': fpr, 'balancedAccuracy': balanced,
             'flaggedMovingByClass': by_class}
@@ -242,7 +247,10 @@ def evaluate(rows, folds=5, seed=42):
     labels = np.asarray([r['label'] for r in usable])
     scores = np.asarray([r['baseline'] for r in usable], float)
     sessions = sorted({r['session'] for r in usable})
-    groups = np.asarray([r['session'] if len(sessions) > 1 else r['group'] for r in usable])
+    watch = any(r.get('watch') for r in usable)
+    if watch and any(not r.get('night') for r in usable):
+        raise ValueError('All sources need a night key when Watch labels are used')
+    groups = np.asarray([r['night'] if watch else r['session'] if len(sessions) > 1 else r['group'] for r in usable])
     n_folds = min(len(set(groups)), folds if len(sessions) == 1 else len(sessions))
     if n_folds < 2 or len(set(labels)) < 2:
         raise ValueError('Need at least two groups and two classes to evaluate')
@@ -259,10 +267,10 @@ def evaluate(rows, folds=5, seed=42):
     for row, label, moving in zip(usable, predicted, baseline_moving):
         row['predicted'], row['baselineMoving'] = str(label), bool(moving)  # out-of-fold, for timelines
     truth_moving = labels != 'still'
-    present = [c for c in CLASSES if (labels == c).any()]
+    present = [c for c in CLASSES + WATCH_CLASSES if (labels == c).any()]
     cm = confusion_matrix(labels, predicted.astype(str), labels=present)
     return {
-        'validation': 'leave-one-session-out' if len(sessions) > 1 else f'{n_folds}-fold grouped by movement within one session (optimistic)',
+        'validation': 'leave-one-night-out' if watch else 'leave-one-session-out' if len(sessions) > 1 else f'{n_folds}-fold grouped by movement within one session (optimistic)',
         'sessions': sessions, 'windows': int(len(usable)), 'windowsWithoutBaseline': len(rows) - len(usable),
         'classCounts': {c: int((labels == c).sum()) for c in present},
         'baseline': {'rule': 'pod movement score ≥ threshold chosen on training folds', 'thresholds': thresholds,
@@ -309,11 +317,42 @@ def load_session_args(values):
 def cmd_train(args):
     if not args.pod and not args.movement:
         raise SystemExit('Pass --pod, or --movement with saved pod movement rows')
+    if args.watch_motion:
+        cc.data_path(args.out)
+        if args.movement:
+            cc.data_path(args.movement)
     out = pb.prepare_output(args.out)
-    rows, sources = [], []
-    for path, export in load_session_args(args.session):
+    rows, sources, seen = [], [], set()
+    if not args.session and not args.watch_motion:
+        raise SystemExit('Pass --session or --watch-motion')
+    if args.watch_alignment and len(args.watch_motion) != 1:
+        raise SystemExit('--watch-alignment requires exactly one Watch capture')
+    inputs = [(p, e, False) for p, e in load_session_args(args.session)] + [(p, e, True) for p, e in load_session_args(args.watch_motion)]
+    for path, export, is_watch in inputs:
+        if is_watch:
+            cc.data_path(path)
+            if export:
+                cc.data_path(export)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
         session = json.loads(path.read_text())
-        name = path.stem
+        name = path.stem + '-' + digest[:8]
+        if is_watch:
+            if not args.side:
+                raise SystemExit('--side is required for Watch labels')
+            clock = cc.load_alignment(json.loads(cc.data_path(args.watch_alignment).read_text())) if args.watch_alignment else None
+            imported = wm.labels(session, clock)
+            session = {'side': args.side, 'watchLabels': imported['labels'], 'night': imported['night'],
+                       'blocks': [{'startMs': cc.align(session['recordedFromMs'], clock or {}),
+                                   'endMs': cc.align(session['recordedToMs'], clock or {})}],
+                       'watchProvenance': {k: v for k, v in imported.items() if k != 'labels'}}
+        elif args.watch_motion:
+            from zoneinfo import ZoneInfo
+            from datetime import timedelta
+            local = datetime.fromtimestamp(session_span(session)[0], ZoneInfo(args.timezone))
+            session['night'] = (local - timedelta(hours=12)).date().isoformat()
         start, end = session_span(session)
         if export is None:
             if not args.pod:
@@ -328,12 +367,23 @@ def cmd_train(args):
         rows.extend(session_rows)
         sources.append({'session': name, 'sessionSha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                         'exportSha256': hashlib.sha256(export.read_bytes()).hexdigest(), 'windows': len(session_rows),
-                        'droppedWindows': dropped, 'decodeErrors': len(errors), 'side': session['side']})
+                        'droppedWindows': dropped, 'decodeErrors': len(errors), 'side': session['side'],
+                        'watchProvenance': session.get('watchProvenance')})
+    if args.watch_motion:
+        unique = {}
+        for row in rows:
+            key = (row['night'], row['t'])
+            if key in unique and unique[key]['label'] != row['label']:
+                raise ValueError('Conflicting labels on overlapping captures')
+            unique.setdefault(key, row)
+        rows = list(unique.values())
     report = evaluate(rows)
     report.update(version='movement-report-v1', kind='movement', generatedAt=datetime.now(timezone.utc).isoformat(),
                   sources=sources, featureNames=FEATURE_NAMES, windowSeconds=WINDOW_S, hopSeconds=HOP_S,
                   eventSeconds=EVENT_SECONDS, reactionSeconds=REACTION_S, scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                  limitations=['Labels are cue times from scripted, deliberate movements, not natural sleep movements.',
+                  limitations=['Labels are scripted cues or preregistered Watch movement heuristics, not verified ground truth.',
+                               'Watch motion is movement-only; never a sleep-stage feature (label leakage).',
+                               'NTP wall-time alignment without matched physical events remains unverified.',
                                'The pod movement score is one value per minute, so it cannot resolve a 2 s window; '
                                'the baseline is scored on the minute containing each window.',
                                'With one session, folds share a person, night and setup; results are optimistic.'])
@@ -367,7 +417,11 @@ def main(argv=None):
     s.add_argument('--cue', choices=('say', 'print'), default='say', help='speak cues (macOS say) or print them')
     s.add_argument('--out', required=True, help='session JSON path (new)')
     t = sub.add_parser('train', help='compare a classifier with the pod movement score')
-    t.add_argument('--session', action='append', required=True, help='session.json, or session.json=export.tar.gz; repeatable')
+    t.add_argument('--session', action='append', default=[], help='session.json, or session.json=export.tar.gz; repeatable')
+    t.add_argument('--watch-motion', action='append', default=[], help='Watch JSON[=export.tar.gz], repeatable; whole nights held out')
+    t.add_argument('--watch-alignment', help='capture-alignment-v1 matched knock/turn pairs for one Watch capture')
+    t.add_argument('--side', choices=('left', 'right'))
+    t.add_argument('--timezone', default='UTC', help='scripted session night grouping when mixing Watch labels')
     t.add_argument('--pod')
     t.add_argument('--movement', help='saved pod movement rows [[epochEndSeconds, score], ...] instead of fetching')
     t.add_argument('--out', required=True)

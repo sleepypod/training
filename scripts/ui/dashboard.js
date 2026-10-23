@@ -2395,19 +2395,22 @@ const taskOf = {
     movement: 'movement',
     'snore-session': 'snore',
     'snore-night': 'snore',
+    'snore-labels': 'snore',
   },
   taskTitle = {
     sleep: 'SLEEP STAGE EXPERIMENT',
     movement: 'MOVEMENT EXPERIMENT',
     snore: 'SNORE RESEARCH',
   },
-  moveClasses = ['still', 'arm', 'leg', 'turn', 'sit'],
+  moveClasses = ['still', 'arm', 'leg', 'turn', 'sit', 'light', 'vigorous'],
   moveColors = {
     still: '#55574c',
     arm: '#c3e25a',
     leg: '#6bc1e7',
     turn: '#bc9ad9',
     sit: '#d9b978',
+    light: '#6bc1e7',
+    vigorous: '#eb8376',
   },
   channelColors = {
     left1: '#6bc1e7',
@@ -2884,6 +2887,43 @@ function renderSnoreSession(host) {
   for (const w of r.warnings || []) steps.append(n('p', w, 'notice'));
   host.append(steps);
 }
+// Separate recording coverage from predicted events: silence outside coverage is unknown.
+function phoneTimeline(capture) {
+  if (!capture) return [];
+  const cuts = [...new Set([capture.startMs, capture.endMs,
+    ...(capture.coverage || []).flatMap(r => [r.startMs, r.endMs]),
+    ...(capture.events || []).flatMap(r => [r.startMs, r.endMs])])].sort((a, b) => a - b);
+  return cuts.slice(0, -1).map((startMs, i) => {
+    const endMs = cuts[i + 1], mid = (startMs + endMs) / 2;
+    const recording = (capture.coverage || []).some(r => r.startMs <= mid && mid < r.endMs);
+    const event = (capture.events || []).find(r => r.startMs <= mid && mid < r.endMs);
+    return { startMs, endMs, state: !recording ? 'Not recording' : event ? 'Phone snore prediction' : 'Recording · no detection', confidence: event?.confidence };
+  });
+}
+function phoneOverlay(svg, capture, x, plot) {
+  for (const row of phoneTimeline(capture)) {
+    const rect = svgEl('rect', { x: x(row.startMs / 1000), y: 12,
+      width: Math.max(0.5, x(row.endMs / 1000) - x(row.startMs / 1000)), height: plot,
+      fill: row.state === 'Not recording' ? '#777' : row.state === 'Phone snore prediction' ? '#d8a75c' : '#65a99b',
+      opacity: row.state === 'Phone snore prediction' ? .3 : .1,
+      'data-recording-state': row.state });
+    rect.append(svgEl('title', {}, row.state + (row.confidence == null ? '' : ' · confidence ' + row.confidence)));
+    svg.append(rect);
+  }
+  for (const ms of capture?.knocks || []) {
+    svg.append(svgEl('line', { x1: x(ms / 1000), x2: x(ms / 1000), y1: 12, y2: 12 + plot, stroke: '#d8a75c', 'stroke-dasharray': '2 3' }));
+  }
+}
+function snoreLabelSummary(r) {
+  const exit = r.exitTest || {};
+  return [
+    'Milestone 2: ' + (exit.result || 'inconclusive'),
+    exit.reason || ('AUC ' + (exit.auc ?? '—') + ' · 95% interval ' + (exit.interval95 || []).join('–')),
+    'Phone coverage: ' + (r.phoneCoverage == null ? '—' : pct(r.phoneCoverage)),
+    r.clock?.synchronized ? 'Physical-event alignment · uncertainty ' + r.clock.uncertaintyMs.toFixed(1) + ' ms' : 'Unsynchronized · excluded from event-level comparison',
+    'Gold: phone snore prediction. Green: recording, no detection. Gray: not recording. Dashed: knocks.',
+  ];
+}
 function renderSnoreNight(host) {
   const r = doc.taskReport,
     windows = doc.windows || [],
@@ -2929,6 +2969,15 @@ function renderSnoreNight(host) {
     ),
   );
   for (const w of r.warnings || []) p.append(n('p', w, 'notice'));
+  if (r.kind === 'snore-labels') {
+    for (const line of snoreLabelSummary(r)) p.append(n('p', line, 'notice'));
+    if (r.capture && r.capture.endMs > r.capture.startMs) {
+      const phone = svgEl('svg', {viewBox: '0 0 900 45', role: 'img', 'aria-label': 'Phone recording coverage and predicted snore events', class: 'task-chart'});
+      phoneOverlay(phone, r.capture, t => (t * 1000 - r.capture.startMs) / (r.capture.endMs - r.capture.startMs) * 900, 24);
+      p.append(phone);
+    }
+    for (const night of r.exitTest?.perNight || []) p.append(n('p', `${night.night}: ${night.bouts} bouts · AUC ${night.auc ?? '—'} · ${night.reason || ''}`));
+  }
   host.append(p);
   if (!windows.length) {
     host.append(
@@ -2971,6 +3020,7 @@ function renderSnoreNight(host) {
         'aria-label':
           band + ' band energy over the night for ' + channels.join(' and '),
       });
+    phoneOverlay(svg, r.capture, x, plot);
     for (let k = 0; k <= 4; k++) {
       const v = range[0] + ((range[1] - range[0]) * k) / 4;
       svg.append(
