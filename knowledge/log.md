@@ -2,6 +2,7 @@
 
 ## 2026-10-22
 
+- **Update**: Added the 13-night rerun to [sequence decoding](evaluation/sequence-decoding-2026-10-21.md); the 10-night decoder gains did not hold.
 - **Creation**: Captured the [piezo bandwidth gate](evaluation/piezo-bandwidth-2026-10-22.md) result: both snore bands passed in one scripted session with imitated snoring; cross-mattress transfer and knock over-counting noted; full-night coverage and archive rate recorded. No model activation.
 
 ## 2026-10-21

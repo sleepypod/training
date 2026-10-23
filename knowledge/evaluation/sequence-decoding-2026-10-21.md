@@ -1,15 +1,15 @@
 ---
 type: "Experimental finding"
 title: "Sequence decoding: 2026-10-21"
-description: "Dropping isolated-epoch smoothing helps the deployed-style forest; Viterbi adds a small gain mainly on the balanced forest. Neither is demonstrated."
+description: "On 10 nights, dropping smoothing or Viterbi decoding gained about 0.02 macro F1; on 13 nights neither gain held, and no decoder showed a statistically supported improvement over production smoothing."
 status: "draft"
-generated: {"by": "claude/opus-5.5", "at": "2026-10-22T02:15:00+00:00"}
-sources: [{"resource": "Local runs seqdecode-20261022T021425Z (final) and seqdecode-20261022T014842Z (superseded): report.json and protocol.json under ignored data/runs/, from scripts/sequence-decoding.py", "title": "Decoder ablation report"}, {"resource": "Local training workspace run 20261021T055014537710Z: features.json under ignored data/runs/", "title": "Labeled feature epochs"}, {"resource": "/evaluation/light-sleep-confusion-2026-10-21.md", "title": "Light-sleep confusion baseline"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]
+generated: {"by": "claude/opus-5.5", "at": "2026-10-23T02:50:00+00:00"}
+sources: [{"resource": "Local run seqdecode-20261022T192528Z-export-1022 (13 nights, same script and grid): report.json under ignored data/runs/", "title": "13-night decoder rerun"}, {"resource": "Local runs seqdecode-20261022T021425Z (final) and seqdecode-20261022T014842Z (superseded): report.json and protocol.json under ignored data/runs/, from scripts/sequence-decoding.py", "title": "Decoder ablation report"}, {"resource": "Local training workspace run 20261021T055014537710Z: features.json under ignored data/runs/", "title": "Labeled feature epochs"}, {"resource": "/evaluation/light-sleep-confusion-2026-10-21.md", "title": "Light-sleep confusion baseline"}, {"resource": "/references/training-run.md", "title": "Training run provenance"}]
 ---
 
 # Sequence decoding: 2026-10-21
 
-On held-out nights, replacing the production isolated-epoch smoothing with plain argmax or HMM/Viterbi decoding raised macro F1 by about 0.02 for the oversampled depth-8 forest. Viterbi's extra transition structure added little there; on the class-balanced forest Viterbi gained about 0.02 where argmax gained nothing, with an interval touching zero. One participant; descriptive, not a recommendation to change production. The title date is the local (America/Los_Angeles) analysis date; run IDs are UTC timestamps, so they read 2026-10-22.
+Update, 13 nights: the gains reported below for 10 nights did not hold. Rerun with the same script and grid on a fresh export covering 13 night groups, no decoder showed a statistically supported improvement in per-night macro F1 over production smoothing: point estimates ranged from −0.008 to +0.014 and every 95% interval includes zero. The original 10-night text follows unchanged for the record. On held-out nights, replacing the production isolated-epoch smoothing with plain argmax or HMM/Viterbi decoding raised macro F1 by about 0.02 for the oversampled depth-8 forest. Viterbi's extra transition structure added little there; on the class-balanced forest Viterbi gained about 0.02 where argmax gained nothing, with an interval touching zero. One participant; descriptive, not a recommendation to change production. The title date is the local (America/Los_Angeles) analysis date; run IDs are UTC timestamps, so they read 2026-10-22.
 
 ## Measured: decoder ablation
 
@@ -27,6 +27,23 @@ On held-out nights, replacing the production isolated-epoch smoothing with plain
 | balanced_leaf10 / Viterbi, no deep↔REM | 0.436 | 0.358 | 0.60 | 0.62 | 0.68 | 105 | 64 | 40 | 25 | 0 | +0.019 (−0.000, +0.044) |
 
 Wake recall is 0 throughout (14 wake epochs). The production baseline reproduces the existing_depth8 confusion cells reported in [light-sleep confusion](light-sleep-confusion-2026-10-21.md).
+
+## Measured: 13-night rerun
+
+Same script, decoders and grid; 13 night groups, 890 labeled epochs (20 wake), from an Apple Health export taken 2026-10-22.
+
+| Forest / decoder | macro F1 | κ | light | deep | REM | light→REM | light→deep | REM→light | deep→light | direct deep↔REM | Δ macro F1 per night (95% night bootstrap) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| existing_depth8 / production | 0.427 | 0.325 | 0.75 | 0.51 | 0.47 | 73 | 64 | 101 | 45 | 0 | — |
+| existing_depth8 / argmax | 0.424 | 0.318 | 0.71 | 0.53 | 0.50 | 86 | 68 | 94 | 42 | 3 | −0.001 (−0.020, +0.018) |
+| existing_depth8 / Viterbi | 0.437 | 0.346 | 0.74 | 0.52 | 0.51 | 74 | 63 | 92 | 43 | 1 | +0.012 (−0.006, +0.030) |
+| existing_depth8 / Viterbi, no deep↔REM | 0.439 | 0.352 | 0.75 | 0.52 | 0.52 | 72 | 63 | 91 | 43 | 0 | +0.014 (−0.004, +0.031) |
+| balanced_leaf10 / production | 0.448 | 0.333 | 0.54 | 0.69 | 0.69 | 148 | 93 | 49 | 26 | 0 | — |
+| balanced_leaf10 / argmax | 0.444 | 0.313 | 0.51 | 0.67 | 0.68 | 154 | 98 | 50 | 28 | 16 | +0.005 (−0.021, +0.044) |
+| balanced_leaf10 / Viterbi | 0.426 | 0.328 | 0.57 | 0.65 | 0.66 | 141 | 89 | 59 | 29 | 2 | −0.008 (−0.043, +0.019) |
+| balanced_leaf10 / Viterbi, no deep↔REM | 0.431 | 0.335 | 0.58 | 0.65 | 0.66 | 139 | 85 | 59 | 29 | 0 | −0.003 (−0.040, +0.026) |
+
+The 10-night argmax gain on existing_depth8 (+0.021, interval excluding zero) became −0.001; balanced_leaf10 Viterbi went from +0.018 to −0.008. Ten of the thirteen nights overlap the earlier run, so the change comes from three added nights and a refreshed export, which shows how unstable differences of this size are.
 
 ## Measured: hyperparameter selection
 
@@ -51,6 +68,6 @@ The first run divided probabilities by the training label prior as a grid option
 
 ## Limitations
 
-One participant, ten nights, already inspected; the grid was revised after seeing results from the earlier runs. Watch labels are not polysomnography. Forest probabilities are uncalibrated. The decoder applies a single transition step across recording gaps (seven gaps of 10–15 minutes and one of 160 minutes in this data). Night bootstrap intervals are approximate because outer training sets overlap. Not prospective; no export or activation.
+One participant, ten and then thirteen nights, already inspected; the grid was revised after seeing results from the earlier runs. Watch labels are not polysomnography. Forest probabilities are uncalibrated. The decoder applies a single transition step across recording gaps (seven gaps of 10–15 minutes and one of 160 minutes in this data). Night bootstrap intervals are approximate because outer training sets overlap. Not prospective; no export or activation.
 
 See [light-sleep confusion](light-sleep-confusion-2026-10-21.md), [validation protocol](validation-protocol.md), [metrics](metrics.md) and [earlier findings](findings-2026-10-20.md).
