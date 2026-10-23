@@ -276,7 +276,7 @@ def evaluate(rows, folds=5, seed=42):
 
 def fetch_movement(pod, side, start, end):
     """Pod movement rows (epoch-end Unix seconds, score) around the session."""
-    query = urllib.parse.urlencode({'side': side, 'limit': 10000,
+    query = urllib.parse.urlencode({'side': side, 'limit': 1000,  # the pod's maximum; a session spans minutes
                                     'startDate': datetime.fromtimestamp(start - 120, timezone.utc).isoformat(),
                                     'endDate': datetime.fromtimestamp(end + 120, timezone.utc).isoformat()})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

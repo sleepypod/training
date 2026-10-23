@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -168,6 +169,11 @@ def stub_pod(tarball, movement_rows):
             if self.path.startswith('/api/export/archive'):
                 body = tarball
             elif self.path.startswith('/api/biometrics/movement'):
+                limit = int(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)['limit'][0])
+                if limit > 1000:  # the pod's validation limit
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 body = json.dumps(movement_rows).encode()
             else:
                 body = b'{}'
