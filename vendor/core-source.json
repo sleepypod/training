@@ -1,12 +1,12 @@
 {
   "repository": "https://github.com/sleepypod/core",
-  "commit": "c9e5c5c037275d3e5a3c255efa2ff8801be13b79",
+  "commit": "18da4f6313064113fc970a0ccec542ed7fa047a0",
   "files": {
     "src/lib/personal-stage-model.ts": "6ed7d48385e4cecd67576d68a25138e92dbd35d2a56a15dd0093eb234bfbe8df",
     "src/lib/sleep-stage-rules.ts": "0666b51b368da1a31cbdc119f2c8591abc4873224d494720e10dee687d334464",
     "src/lib/sleep-stages.ts": "b1800e49ce8525d314333da6a29a63131a002d160bb294fa97b24df6e655e228",
-    "modules/common/biometrics/manifest.v1.json": "5802c8f1b528d7832f8b992c4d2b697e1124c729e16811ca9a018f845645aec4",
-    "docs/research/sleep-stage-calibration/personal-models.py": "538d336d8d61718798abf2560704bb17f2bb62ddd3fd6b3023b0f4ad6303fb85",
+    "modules/common/biometrics/manifest.v1.json": "08e07956ff81a4a0198aae4996e3674c65455e5507c1e2b4bf75c4f833ab7715",
+    "docs/research/sleep-stage-calibration/personal-models.py": "4631c71ecc89cab999e6b879c5e6fd04780aa73086ac387eb8013db00123456c",
     "LICENSE": "a2230ae301dc553fbc318f17b8c9ddd4363d3cbb227f86ad1e3c3858067b2d81"
   }
 }

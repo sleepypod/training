@@ -7,7 +7,7 @@ const script = readFileSync(
   'utf8',
 ).split("document.addEventListener('click'")[0];
 function element(tag) {
-  return { tag, children: [], attrs: {}, append(...items) { this.children.push(...items); },
+  return { tag, children: [], attrs: {}, dataset: {}, append(...items) { this.children.push(...items); },
     setAttribute(k, v) { this.attrs[k] = v; }, textContent: '' };
 }
 const context = vm.createContext({
@@ -17,7 +17,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   script +
-    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary}',
+    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,setDoc:value=>{doc=value}}',
   context,
 );
 const {
@@ -303,6 +303,29 @@ test('phone labels render coverage, no-detection and gaps separately on the ener
   assert.deepEqual(svg.children.filter(r => r.tag === 'rect').map(r => r.attrs.width), [10, 30, 10, 50]);
   assert.equal(svg.children[1].children[0].textContent, 'Phone snore prediction · confidence 0.8');
   assert.equal(svg.children[3].attrs['data-recording-state'], 'Not recording');
-  assert.ok(context.testAPI.snoreLabelSummary({ exitTest: { result: 'inconclusive', reason: 'Missing window confidences' }, phoneCoverage: .5 }).includes('Phone coverage: 50.0%'));
+  assert.ok(context.testAPI.snoreLabelSummary({ capture, exitTest: { result: 'inconclusive', reason: 'Missing window confidences' }, phoneCoverage: .5 }).includes('Phone coverage: 50.0%'));
   assert.equal(context.testAPI.snoreLabelSummary({ exitTest: { result: 'pass', auc: .8, interval95: [.6,.9] }, clock: {synchronized:true, uncertaintyMs:2} })[0], 'Milestone 2: pass');
+});
+
+test('aggregate exit reports omit capture-only status and missing-window warnings', () => {
+  const report = {kind:'snore-labels', exitTest:{result:'pass', auc:.8, interval95:[.6,.9], perNight:[{night:'synthetic',bouts:5,auc:.8}]}};
+  context.testAPI.setDoc({taskReport:report});
+  const host = element('div');
+  context.testAPI.renderSnoreNight(host);
+  const allText = e => [e.textContent, ...e.children.map(allText)].join(' ');
+  const text = allText(host);
+  assert.match(text, /Milestone 2: pass/);
+  assert.match(text, /synthetic: 5 bouts/);
+  assert.doesNotMatch(text, /[Uu]nsynchronized|undefined|[Cc]overage|[Aa]rchive|Rerun|[Cc]hannels/);
+});
+test('band hit titles retain every overlapping phone state and confidence', () => {
+  const capture = {startMs:0,endMs:10000,coverage:[{startMs:0,endMs:6000}], events:[{startMs:2000,endMs:4000,confidence:.8}]};
+  const text = context.testAPI.phoneWindowSummary(context.testAPI.phoneTimeline(capture), 1000, 9000);
+  assert.match(text, /Recording · no detection/);
+  assert.match(text, /Phone snore prediction · confidence 0.8/);
+  assert.match(text, /Not recording/);
+  assert.equal(context.testAPI.phoneWindowSummary(context.testAPI.phoneTimeline(capture), 10000, 20000), '');
+  const svg = element('svg');
+  context.testAPI.phoneOverlay(svg,capture,t=>t,20,false);
+  assert.ok(svg.children.every(r=>r.attrs['pointer-events']==='none'));
 });

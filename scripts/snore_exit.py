@@ -25,10 +25,10 @@ def bouts(windows):
 
 
 def night_units(night):
-    if night.get('occupants') != 1 or not night.get('synchronized'):
-        return None, 'Requires a synchronized single-occupant night'
     if not night.get('calibrationId') or not night.get('windowConfidencesAvailable'):
         return None, 'Missing calibrated per-window confidences; event peaks cannot establish guard-band negatives'
+    if night.get('occupants') != 1 or not night.get('synchronized'):
+        return None, 'Requires a synchronized single-occupant night'
     threshold = night['threshold']
     if not 0 < threshold <= 1:
         raise ValueError('Invalid calibrated threshold')

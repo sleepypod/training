@@ -2900,13 +2900,13 @@ function phoneTimeline(capture) {
     return { startMs, endMs, state: !recording ? 'Not recording' : event ? 'Phone snore prediction' : 'Recording · no detection', confidence: event?.confidence };
   });
 }
-function phoneOverlay(svg, capture, x, plot) {
+function phoneOverlay(svg, capture, x, plot, interactive = true) {
   for (const row of phoneTimeline(capture)) {
     const rect = svgEl('rect', { x: x(row.startMs / 1000), y: 12,
       width: Math.max(0.5, x(row.endMs / 1000) - x(row.startMs / 1000)), height: plot,
       fill: row.state === 'Not recording' ? '#777' : row.state === 'Phone snore prediction' ? '#d8a75c' : '#65a99b',
       opacity: row.state === 'Phone snore prediction' ? .3 : .1,
-      'data-recording-state': row.state });
+      'data-recording-state': row.state, 'pointer-events': interactive ? 'auto' : 'none' });
     rect.append(svgEl('title', {}, row.state + (row.confidence == null ? '' : ' · confidence ' + row.confidence)));
     svg.append(rect);
   }
@@ -2914,15 +2914,26 @@ function phoneOverlay(svg, capture, x, plot) {
     svg.append(svgEl('line', { x1: x(ms / 1000), x2: x(ms / 1000), y1: 12, y2: 12 + plot, stroke: '#d8a75c', 'stroke-dasharray': '2 3' }));
   }
 }
+function phoneWindowSummary(rows, startMs, endMs) {
+  return rows.filter(row => row.startMs < endMs && startMs < row.endMs)
+    .map(row => ' · ' + row.state + (row.confidence == null ? '' : ' · confidence ' + row.confidence)).join('');
+}
 function snoreLabelSummary(r) {
   const exit = r.exitTest || {};
-  return [
+  const lines = [
     'Milestone 2: ' + (exit.result || 'inconclusive'),
     exit.reason || ('AUC ' + (exit.auc ?? '—') + ' · 95% interval ' + (exit.interval95 || []).join('–')),
+  ];
+  if (r.capture) lines.push(
     'Phone coverage: ' + (r.phoneCoverage == null ? '—' : pct(r.phoneCoverage)),
     r.clock?.synchronized ? 'Physical-event alignment · uncertainty ' + r.clock.uncertaintyMs.toFixed(1) + ' ms' : 'Unsynchronized · excluded from event-level comparison',
     'Gold: phone snore prediction. Green: recording, no detection. Gray: not recording. Dashed: knocks.',
-  ];
+  );
+  return lines;
+}
+function appendSnoreResult(parent, r) {
+  for (const line of snoreLabelSummary(r)) parent.append(n('p', line, 'notice'));
+  for (const night of r.exitTest?.perNight || []) parent.append(n('p', `${night.night}: ${night.bouts} bouts · AUC ${night.auc ?? '—'} · ${night.reason || ''}`));
 }
 function renderSnoreNight(host) {
   const r = doc.taskReport,
@@ -2930,6 +2941,12 @@ function renderSnoreNight(host) {
     s = r.storage || {},
     p = panel('Overnight snore-band energy', 'bandEnergy'),
     cards = n('div', null, 'scorecards');
+  if (r.kind === 'snore-labels' && !r.capture) {
+    const summary = panel('Snore exit test');
+    appendSnoreResult(summary, r);
+    host.append(summary);
+    return;
+  }
   cards.append(
     card(
       'Coverage',
@@ -2944,7 +2961,7 @@ function renderSnoreNight(host) {
     card(
       'Archive gzip',
       s.archiveGzipRatio == null ? '—' : s.archiveGzipRatio.toFixed(2),
-      s.archivedFiles + ' archived files',
+      s.archivedFiles == null ? '—' : s.archivedFiles + ' archived files',
     ),
     card(
       'Pod writes',
@@ -2970,13 +2987,12 @@ function renderSnoreNight(host) {
   );
   for (const w of r.warnings || []) p.append(n('p', w, 'notice'));
   if (r.kind === 'snore-labels') {
-    for (const line of snoreLabelSummary(r)) p.append(n('p', line, 'notice'));
+    appendSnoreResult(p, r);
     if (r.capture && r.capture.endMs > r.capture.startMs) {
       const phone = svgEl('svg', {viewBox: '0 0 900 45', role: 'img', 'aria-label': 'Phone recording coverage and predicted snore events', class: 'task-chart'});
       phoneOverlay(phone, r.capture, t => (t * 1000 - r.capture.startMs) / (r.capture.endMs - r.capture.startMs) * 900, 24);
       p.append(phone);
     }
-    for (const night of r.exitTest?.perNight || []) p.append(n('p', `${night.night}: ${night.bouts} bouts · AUC ${night.auc ?? '—'} · ${night.reason || ''}`));
   }
   host.append(p);
   if (!windows.length) {
@@ -2988,6 +3004,7 @@ function renderSnoreNight(host) {
     return;
   }
   const ref = doc.reference,
+    phoneRows = phoneTimeline(r.capture),
     step = (r.windowSecondsEach || 30) * 1.5,
     channels = r.channels || [],
     t0 = Math.min(...windows.map((w) => w.t)),
@@ -3020,7 +3037,7 @@ function renderSnoreNight(host) {
         'aria-label':
           band + ' band energy over the night for ' + channels.join(' and '),
       });
-    phoneOverlay(svg, r.capture, x, plot);
+    phoneOverlay(svg, r.capture, x, plot, false);
     for (let k = 0; k <= 4; k++) {
       const v = range[0] + ((range[1] - range[0]) * k) / 4;
       svg.append(
@@ -3131,7 +3148,8 @@ function renderSnoreNight(host) {
                     : w.bands[ch][band].toFixed(1) + ' dB'),
               )
               .join(' · ') +
-            (w.pump == null ? '' : ' · pump ' + w.pump + ' rpm'),
+            (w.pump == null ? '' : ' · pump ' + w.pump + ' rpm') +
+            phoneWindowSummary(phoneRows, w.t * 1000, (w.t + (r.windowSecondsEach || 30)) * 1000),
         ),
       );
       svg.append(hit);

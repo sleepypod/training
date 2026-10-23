@@ -158,6 +158,7 @@ class SnoreTests(unittest.TestCase):
         report = sl.import_session(snore(), recs, [], 'left')
         self.assertEqual(report['kind'], 'snore-labels')
         self.assertEqual(report['exitTest']['result'], 'inconclusive')
+        self.assertIn('Missing calibrated per-window confidences', report['exitTest']['perNight'][0]['reason'])
         self.assertFalse(report['clock']['synchronized'])
         self.assertAlmostEqual(report['phoneCoverage'], 110 / 120)
         self.assertEqual(report['capture']['coverage'], snore()['coverage'])
