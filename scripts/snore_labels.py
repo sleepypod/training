@@ -48,12 +48,15 @@ def parse(doc):
     interruptions = []
     for row in doc.get('interruptions', []):
         cc.text(row.get('reason'), 'interruption reason')
-        a, b = cc.interval(row, start, end)
+        a = cc.number(row.get('startMs'), 'interruption startMs', start, True)
+        b = cc.number(row.get('endMs'), 'interruption endMs', a, True)
+        if b > end:
+            raise ValueError('Interruption outside session')
         if any(min(b, d) > max(a, c) for c, d in coverage):
             raise ValueError('Interruption overlaps recording coverage')
         interruptions.append((a, b))
-    if interruptions != sorted(interruptions):
-        raise ValueError('Interruptions out of order')
+    if interruptions != sorted(interruptions) or any(a < previous for (_, previous), (a, _) in zip(interruptions, interruptions[1:])):
+        raise ValueError('Interruptions out of order or overlapping')
     previous = start
     for row in doc.get('events', []):
         a, b = cc.interval(row, start, end)
@@ -62,8 +65,10 @@ def parse(doc):
             raise ValueError('Event confidence inconsistent with opening threshold')
         if row.get('captureId') != doc['captureId'] or row.get('eventType') != 'snore' or row.get('labelOrigin') != 'predicted' or row.get('detectorVersion') != DETECTOR:
             raise ValueError('Unknown event provenance')
-        if a < previous or not cc.covered(a, b, coverage):
-            raise ValueError('Events must be ordered, nonoverlapping and recorded')
+        # The iOS tracker can merge across a short interruption. Preserve the
+        # event span, but coverage always wins in display and evaluation.
+        if a < previous or not any(min(b, d) > max(a, c) for c, d in coverage):
+            raise ValueError('Events must be ordered, nonoverlapping and overlap recording')
         previous = b
     previous = -1
     for t in doc.get('knocks', []):

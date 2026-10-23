@@ -273,3 +273,18 @@ class WatchCommandTests(unittest.TestCase):
             self.assertEqual(len(report['sources']), 2)
             self.assertFalse(report['sources'][0]['watchProvenance']['clock']['synchronized'])
             register.assert_called_once_with(out)
+
+
+class CaptureBoundaryTests(unittest.TestCase):
+    def test_ios_merged_event_may_span_gap_but_gap_remains_uncovered(self):
+        doc = snore()
+        doc['events'][0].update(startMs=T + 39_000, endMs=T + 51_000)
+        self.assertEqual(sl.parse(doc)['coverage'], snore()['coverage'])
+        self.assertFalse(cc.covered(T + 40_000, T + 43_000, [(r['startMs'], r['endMs']) for r in doc['coverage']]))
+
+    def test_recovered_interruption_can_close_at_its_start(self):
+        doc = snore(); doc['stopReason'] = 'app not running'
+        doc['endMs'] = T + 40_000; doc['coverage'] = doc['coverage'][:1]
+        doc['interruptions'][0]['endMs'] = T + 40_000
+        doc['knocks'] = doc['knocks'][:3]
+        sl.parse(doc)
