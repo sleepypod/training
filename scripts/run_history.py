@@ -27,7 +27,7 @@ def read_json(path, default=None):
 
 
 # Research runs that are not sleep-stage training write report.json with one of these kinds.
-TASK_KINDS = {'movement': 'movement', 'snore-session': 'snore', 'snore-night': 'snore'}
+TASK_KINDS = {'movement': 'movement', 'snore-session': 'snore', 'snore-night': 'snore', 'snore-labels': 'snore'}
 
 
 def run_kind(path):
@@ -127,6 +127,8 @@ def task_entry(key, root, kind, added):
     if kind == 'movement':
         accuracy = report.get('classifier', {}).get('balancedAccuracy')
         summary = f"{report.get('windows', '—')} windows · balanced accuracy " + (f'{accuracy:.2f}' if accuracy is not None else '—')
+    elif kind == 'snore-labels':
+        summary = 'Phone labels · exit test ' + report.get('exitTest', {}).get('result', 'inconclusive')
     elif kind == 'snore-session':
         summary = 'Bandwidth gate · ' + str(report.get('outcome', '—'))
     else:
