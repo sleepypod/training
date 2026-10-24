@@ -390,3 +390,128 @@ directory indexes, and `knowledge/log.md` when changing concepts. Add `verified`
 only after a real review, naming the reviewer and scope.
 
 Aggregate evidence still describes personal data. Review it before public release.
+
+## Import Watch movement
+
+The importer follows iOS `docs/watch-motion-format.md` and
+`Shared/WatchMotion/WatchMotionFile.swift` on dev: `watch-motion-v1`, 50 Hz
+acceleration in g, **2-second bins** (not per-second), jerk in g/s, variance in
+ g², Unix milliseconds, IANA zone and its offset at capture start. Unknown
+versions, unsupported bin/rate/jerk settings, malformed columns, duplicate bins,
+invalid counts and inconsistent zones are refused. Optional raw samples remain
+under ignored `data/`; no health data belongs in fixtures or CI.
+
+```sh
+uv run --locked python scripts/watch_motion.py data/watch/night1.json data/watch/night2.json --out data/watch/labels.json
+uv run --locked python scripts/movement.py train \
+  --watch-motion data/watch/night1.json=data/raw/night1.tar.gz \
+  --watch-motion data/watch/night2.json=data/raw/night2.tar.gz \
+  --side left --movement data/pod-movement.json --out data/watch-movement-run
+```
+
+Use `--pod <address>` instead of saved exports/movement to fetch with archive
+slack. Existing `--session` inputs can be mixed with Watch captures; specify
+`--timezone` for scripted night grouping. Watch captures use their recorded zone.
+Each window is grouped by its source Watch time and recorded zone (before clock
+alignment), so captures spanning local noon are split between nights. Windows
+straddling noon are excluded to avoid sharing samples across folds.
+All captures from a local noon-to-noon night stay in the same held-out fold;
+a single Watch night cannot produce a validation score. Overlapping windows
+are deduplicated and conflicting labels refused. The report compares the
+classifier with the existing per-minute pod movement score on identical windows.
+
+Thresholds are fixed in `watch_motion.py` before observing results: at least 80
+of the expected 100 samples per bin; moving when at least 5% exceed the exported
+1 g/s jerk threshold; vigorous at 20%, otherwise light movement or still.
+These are provisional heuristics, not measured classifier accuracy. Missing or
+under-covered bins remain unknown, including when aggregating a window; they
+never become zero movement. Keep thresholds fixed for an evaluation; any change
+needs a new label version and fresh held-out evaluation.
+
+Watch motion is a **movement label only**. Never use it as a sleep-stage feature
+when Watch stages are the target: the Watch's own stages use acceleration, so
+that would leak the label.
+
+Both devices use wall time; NTP alone does not verify sensor alignment. When
+knock or turn events are available, pass `--alignment` to the importer or
+`--watch-alignment` to `movement.py train` for one capture. The JSON contract is
+`{"version":"capture-alignment-v1","confirmation":"schedule","pairs":[{"sourceMs":...,"podMs":...},...]}`.
+Use at least three matched events near each end, confirmed against the schedule
+or raw energy (`confirmation: "energy-fit"`). Ending knocks were sharper in the
+2026-10-22 movement session: inspect those first, then check the opening group.
+The end-anchored linear fit records offset, drift and residual uncertainty;
+missing checks are explicitly reported as NTP-only and unverified.
+
+## Import iPhone snore sessions
+
+The importer follows iOS `docs/snore-capture.md` and `Services/Snore/`:
+`sleepypod-snore-capture-v1`, `units: "unix-ms"`, recorded IANA zone,
+`iphone-microphone`, and the known Apple classifier/hysteresis version.
+It validates the microphone format, classifier parameters, bounds, predicted
+event provenance, confidences, coverage, interruptions and knock timestamps.
+Export a stopped session; unfinished captures and unknown versions are refused.
+No audio is read, stored or required.
+
+```sh
+uv run --locked python scripts/snore_labels.py \
+  --session data/snore/phone-night1.json --export data/raw/night1.tar.gz \
+  --side left --out data/snore-night1
+# Or --pod <address> in place of --export; fetch waits are not implicit.
+uv run --locked python scripts/snore_labels.py \
+  --reports data/snore-night1/report.json data/snore-night2/report.json \
+  --out data/snore-exit
+```
+
+Fetch after finished frames have reached the archive (about 30–45 minutes),
+with one hour of end slack. Decoding and band energy reuse `raw_piezo` and
+`piezo_bandwidth`; source SHA-256 hashes and decode errors accompany each run.
+Three-knock schedules at both ends are matched to sharp piezo transients,
+ending first, with a residual-energy timing fit; ambiguous matches refuse sync.
+Use `--alignment data/snore/matches.json` for independently confirmed pairs as
+above. Offsets beyond the automatic ±5 s search need explicit matched pairs.
+Without matched knocks the timeline uses wall time, says **unsynchronized**,
+and is excluded from event-level evaluation. A full night on real hardware is
+still needed to validate this detector and uncertainty estimate.
+
+Reports have `kind: "snore-labels"` and register in the catalog's Snore view.
+Phone events overlay the raw night band-energy timeline with confidence tooltips,
+knock markers, phone coverage, and the exit-test result/per-night AUCs. Green
+means recording with no detection, gray means not recording, gold means a phone
+prediction. A prediction is not verified snoring or a diagnosis.
+
+### Milestone-2 exit test and the current export limit
+
+`snore_exit.py` preregisters section 4 of
+`docs/overnight-capture-implementation-plan.md`: one 3 s log-power score in the
+lower passing band on the preregistered occupant channel, normalized by that
+night's median occupied pump-off windows; single occupant only; negatives below
+half the calibrated threshold within 30 minutes of positives; movement/pump
+exclusions with a 10 s guard; median scores per bout (positive windows less than
+30 s apart merge). Negative windows also merge into control bouts to avoid
+window pseudoreplication. At least five eligible nights, at least three with
+five positive bouts, are required. Report per-night AUCs and pooled AUC with a
+95% interval from 2,000 night-resampled bootstrap draws (seed 42). Pass is AUC
+≥0.7 and lower bound >0.5; fail is upper bound <0.7; otherwise inconclusive.
+Duplicate nights and mixed calibration/threshold/band contracts are refused.
+
+**Current iOS v1 saves merged events and peak confidence, not all detector
+windows.** Therefore no event does not establish confidence below threshold/2.
+These imports remain inconclusive for the exit test; the importer never invents
+negative confidences. Real overnight exports alone will not fix this limitation:
+a calibration session and a future per-window confidence export are needed.
+
+For synthetic checks or a separately produced calibrated window export, optional
+`--window-evidence data/snore/windows.json` accepts `snore-window-evidence-v1`:
+`captureId`, `registeredBeforeCaptureMs`, `calibrationId`, `threshold`,
+`passingBands` (ordered `16-30Hz`, `60-100Hz`, or one passing band),
+`primaryChannel`, `occupants`, `windows` (`startMs`, `endMs`, `confidence` in the
+phone clock), and `occupied`, `pumpOff`, `pumpActive`, `movement` arrays of
+`{startMs,endMs}` in the pod clock. Unknown pump/occupancy coverage is excluded.
+This companion contract is not claimed to be an existing iOS file format.
+The code computes scores directly from raw piezo; it never accepts supplied
+scores. Missing coverage, evidence or synchronization yields inconclusive.
+
+All implementation tests use deterministic synthetic files. Still needed on
+real files: overnight Watch coverage and heuristic quality, phone calibration,
+clock-match robustness/drift, recording interruption behavior, and at least the
+preregistered night/bout minimum. No new empirical findings are claimed here.
