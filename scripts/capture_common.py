@@ -93,6 +93,15 @@ def align(ms, clock):
     return ms + clock.get('offsetMs', 0) + (ms - clock.get('anchorMs', ms)) * clock.get('driftPpm', 0) / 1e6
 
 
+def unalign(ms, clock):
+    """Return source wall time for a pod timestamp, including offset and drift."""
+    drift = clock.get('driftPpm', 0) / 1e6
+    anchor = clock.get('anchorMs')
+    if anchor is None:
+        return ms - clock.get('offsetMs', 0)
+    return (ms - clock.get('offsetMs', 0) + anchor * drift) / (1 + drift)
+
+
 def load_alignment(doc):
     if doc.get('version') != 'capture-alignment-v1':
         raise ValueError('Unknown alignment version')

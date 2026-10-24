@@ -199,9 +199,22 @@ def build_windows(recs, session, movement, name):
     events = [] if watch is not None else event_windows(session)
     start, end = session_span(session)
     rows, dropped = [], 0
+    provenance = session.get('watchProvenance') if watch is not None else None
     t = start
     while t + WINDOW_S <= end:
         cls, index = (wm.label_window(t, t + WINDOW_S, watch), None) if watch is not None else label_window(t, t + WINDOW_S, events)
+        night = session.get('night')
+        if cls is not None and provenance:
+            def source_night(ms):
+                return wm.night_key({'recordedFromMs': cc.unalign(ms, provenance['clock']),
+                                     'timeZone': provenance['timeZone']})
+            night = source_night(t * 1000)
+            # Overlapping feature windows must not share samples across folds.
+            # Intervals are half-open, so an end exactly at noon stays before it.
+            if source_night((t + WINDOW_S) * 1000 - .001) != night:
+                dropped += 1
+                t += HOP_S
+                continue
         if cls is not None:
             occ = piezo_slice(seconds, f'{side}1', t, t + WINDOW_S)
             oth = piezo_slice(seconds, f'{other}1', t, t + WINDOW_S)
@@ -211,7 +224,7 @@ def build_windows(recs, session, movement, name):
                 dropped += 1
             else:
                 rows.append({'session': name, 't': round(t, 3), 'label': cls,
-                             'night': session.get('night'), 'watch': watch is not None,
+                             'night': night, 'watch': watch is not None,
                              'group': f'{name}/event{index}' if index is not None else f'{name}/still{int((t - start) // 10)}',
                              'x': piezo_features(occ) + piezo_features(oth) + cap_occ + cap_oth,
                              'baseline': baseline_score(movement, t + WINDOW_S / 2)})

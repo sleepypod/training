@@ -1,5 +1,7 @@
 """Invented iOS-format captures only. No personal data or captured health files."""
 import copy
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 import tempfile
 import unittest
@@ -107,6 +109,32 @@ class WatchTests(unittest.TestCase):
         self.assertTrue(all(r['t'] < T / 1000 + 8 for r in windows))
         self.assertFalse(any(T / 1000 + 3 <= r['t'] < T / 1000 + 6 for r in windows))
 
+    def test_watch_rows_group_by_source_night_across_noon(self):
+        for zone in ['UTC', 'America/Los_Angeles']:
+            noon = datetime(2026, 10, 24, 12, tzinfo=ZoneInfo(zone)).timestamp() * 1000
+            for clock in [{}, {'offsetMs': 5000},
+                          {'anchorMs': noon, 'offsetMs': 5000, 'driftPpm': 100}]:
+                with self.subTest(zone=zone, clock=clock):
+                    start, end = cc.align(noon - 4000, clock), cc.align(noon + 4000, clock)
+                    session = {'side': 'left', 'night': 'wrong-capture-start-night',
+                               'blocks': [{'startMs': start, 'endMs': end}],
+                               'watchLabels': [{'startMs': start, 'endMs': end, 'movingFraction': 0}],
+                               'watchProvenance': {'clock': clock, 'timeZone': zone}}
+                    with patch.object(mv.rp, 'piezo_seconds', return_value=({}, {})), \
+                         patch.object(mv, 'capsense_series', return_value={'left': [], 'right': []}), \
+                         patch.object(mv, 'piezo_slice', return_value=np.zeros(1000)), \
+                         patch.object(mv, 'capsense_features', return_value=([0, 0], True)), \
+                         patch.object(mv, 'piezo_features', return_value=[0]):
+                        rows, dropped = mv.build_windows([], session, [], 'cross-noon')
+                    self.assertEqual({r['night'] for r in rows}, {'2026-10-23', '2026-10-24'})
+                    self.assertGreater(dropped, 0)
+                    for row in rows:
+                        source_start = cc.unalign(row['t'] * 1000, clock)
+                        source_end = cc.unalign((row['t'] + mv.WINDOW_S) * 1000 - .001, clock)
+                        expected = '2026-10-23' if source_start < noon else '2026-10-24'
+                        self.assertEqual(row['night'], expected)
+                        self.assertEqual(source_start < noon, source_end < noon)
+
 
 class ClockTests(unittest.TestCase):
     def test_offset_and_drift_within_one_piezo_sample(self):
@@ -116,6 +144,11 @@ class ClockTests(unittest.TestCase):
             self.assertLess(abs(cc.align(pair['sourceMs'], clock) - pair['podMs']), 2)
         automatic = cc.match_knocks(snore()['knocks'], [p['podMs'] for p in doc['pairs']], T, T + 120_000)
         self.assertLess(abs(cc.align(T + 50_000, automatic) - (T + 50_401)), 2)
+
+    def test_inverse_alignment_roundtrips_offset_and_drift(self):
+        for clock in [{}, {'offsetMs': 400}, {'driftPpm': 20}, cc.load_alignment(alignment())]:
+            for stamp in [T, T + 60_000, T + 120_000]:
+                self.assertAlmostEqual(cc.unalign(cc.align(stamp, clock), clock), stamp, places=3)
 
     def test_missing_ambiguous_and_clock_jumps_refused(self):
         with self.assertRaises(ValueError): cc.clock_fit([])

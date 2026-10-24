@@ -412,6 +412,9 @@ uv run --locked python scripts/movement.py train \
 Use `--pod <address>` instead of saved exports/movement to fetch with archive
 slack. Existing `--session` inputs can be mixed with Watch captures; specify
 `--timezone` for scripted night grouping. Watch captures use their recorded zone.
+Each window is grouped by its source Watch time and recorded zone (before clock
+alignment), so captures spanning local noon are split between nights. Windows
+straddling noon are excluded to avoid sharing samples across folds.
 All captures from a local noon-to-noon night stay in the same held-out fold;
 a single Watch night cannot produce a validation score. Overlapping windows
 are deduplicated and conflicting labels refused. The report compares the
