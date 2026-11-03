@@ -260,6 +260,15 @@ uv run --locked python scripts/retrain-models.py data/features.json --out data/r
 npm run parity -- data/runs/manual-model
 ```
 
+Literature-derived feature ablation (context, movement bouts, arousal coupling,
+and a wake-first hierarchical forest) on an existing run's features and the
+snapshot they came from. It compares arms only and never exports a model:
+
+```sh
+uv run --locked python scripts/feature-ablation.py data/runs/RUN/features.json \
+  --snapshot data/biometrics.db --out data/runs/ablation
+```
+
 ## Save and reuse a model
 
 Every successful run automatically saves `model/candidate.json` (portable pod
