@@ -1,5 +1,5 @@
 /** Export local training inputs using exactly the pod's preprocessing and bed windows.
- * Usage: tsx export-runtime-features.ts snapshot.db watch.json output.json [left|right] [timezone]
+ * Usage: tsx export-runtime-features.ts snapshot.db watch.json output.json [left|right] [timezone] [podNative|podContext]
  * Output contains private biometrics. Keep it outside version control.
  */
 import Database from 'better-sqlite3'
@@ -7,12 +7,13 @@ import { z } from 'zod'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
-import { filterModelOutliers, stageModelFeatures, POD_NATIVE_CONTRACT } from '../vendor/core/src/lib/personal-stage-model'
+import { filterModelOutliers, stageModelFeatures, STAGE_MODEL_CONTRACTS } from '../vendor/core/src/lib/personal-stage-model'
 import { DEFAULT_STAGE_RULESET } from '../vendor/core/src/lib/sleep-stage-rules'
 import { runStageClassifier } from '../vendor/core/src/lib/sleep-stages'
 
-const [snapshot, watchPath, output, side = 'left', timeZone = 'America/Los_Angeles'] = process.argv.slice(2)
-if (!snapshot || !watchPath || !output || !['left', 'right'].includes(side)) throw new Error('Expected snapshot.db watch.json output.json [left|right] [timezone]')
+const [snapshot, watchPath, output, side = 'left', timeZone = 'America/Los_Angeles', contract = 'podNative'] = process.argv.slice(2)
+if (!snapshot || !watchPath || !output || !['left', 'right'].includes(side) || !['podNative', 'podContext'].includes(contract)) throw new Error('Expected snapshot.db watch.json output.json [left|right] [timezone] [podNative|podContext]')
+const columns = STAGE_MODEL_CONTRACTS[contract as 'podNative' | 'podContext']
 new Intl.DateTimeFormat('en', { timeZone }).format(new Date())
 const db = new Database(snapshot, { readonly: true, fileMustExist: true })
 const watch = z.object({ stages: z.array(z.tuple([z.number().int().nonnegative(), z.number().int().positive(), z.enum(['wake', 'light', 'deep', 'rem'])]).refine(([start, end]) => end > start)).min(1) }).parse(JSON.parse(readFileSync(watchPath, 'utf8')))
@@ -33,14 +34,14 @@ for (const record of records) {
     .map(r => ({ timestamp: new Date(r.timestamp * 1000), heartRate: r.heart_rate, hrv: r.hrv, breathingRate: r.breathing_rate }))
   const movement = (db.prepare('select timestamp,total_movement from movement where side=? and timestamp>=? and timestamp<? order by timestamp').all(side, record.s, record.e) as { timestamp: number, total_movement: number }[])
     .map(r => ({ timestamp: new Date(r.timestamp * 1000), totalMovement: r.total_movement }))
-  const epochs = stageModelFeatures('podNative', new Date(record.s * 1000), new Date(record.e * 1000), filterModelOutliers(vitals, ruleset.outliers), movement)
+  const epochs = stageModelFeatures(contract as 'podNative' | 'podContext', new Date(record.s * 1000), new Date(record.e * 1000), filterModelOutliers(vitals, ruleset.outliers), movement)
   const rules = runStageClassifier(vitals, movement, quality, ruleset).epochs
   const rows = epochs.map((epoch) => {
     const mid = epoch.start + 150
     const reference = labelsAt(mid)
     const rule = rules.find(r => r.start <= mid * 1000 && mid * 1000 < r.start + r.duration)
     const podLabels = [...new Set((podStages?.sessions[String(record.id)] ?? []).filter(r => r.start <= mid * 1000 && mid * 1000 < r.start + r.duration).map(r => stages.indexOf(r.stage)))]
-    return { pod: podLabels.length === 1 && podLabels[0] >= 0 ? podLabels[0] : null, start: epoch.start, x: POD_NATIVE_CONTRACT.map(c => epoch.values[c]), y: reference.length === 1 ? reference[0] : null, rule: rule ? stages.indexOf(rule.stage) : null }
+    return { pod: podLabels.length === 1 && podLabels[0] >= 0 ? podLabels[0] : null, start: epoch.start, x: columns.map(c => epoch.values[c]), y: reference.length === 1 ? reference[0] : null, rule: rule ? stages.indexOf(rule.stage) : null }
   })
   if (rows.filter(r => r.y !== null).length < 24) continue
   // Noon-to-noon grouping keeps fragmented sessions of one local night together.
@@ -49,6 +50,6 @@ for (const record of records) {
 }
 const hash = (path: string | URL) => createHash('sha256').update(readFileSync(path)).digest('hex')
 mkdirSync(dirname(output), { recursive: true })
-writeFileSync(output, JSON.stringify({ version: 1, side, timeZone, podStageSource: podStages ? 'pod-api' : 'replayed-rules', features: POD_NATIVE_CONTRACT, ruleset, sources: { ...(podStages ? { podStages: hash(podPath) } : {}), ...(existsSync(join(dirname(snapshot), 'acquisition.json')) ? { acquisition: hash(join(dirname(snapshot), 'acquisition.json')) } : {}), coreCommit: JSON.parse(readFileSync(new URL('../vendor/core-source.json', import.meta.url), 'utf8')).commit, vendorManifest: hash(new URL('../vendor/core-source.json', import.meta.url)), snapshot: hash(snapshot), watch: hash(watchPath), featureCode: hash(new URL('../vendor/core/src/lib/personal-stage-model.ts', import.meta.url)) }, nights }), { flag: 'wx' })
+writeFileSync(output, JSON.stringify({ version: 1, side, timeZone, podStageSource: podStages ? 'pod-api' : 'replayed-rules', features: columns, contract, ruleset, sources: { ...(podStages ? { podStages: hash(podPath) } : {}), ...(existsSync(join(dirname(snapshot), 'acquisition.json')) ? { acquisition: hash(join(dirname(snapshot), 'acquisition.json')) } : {}), coreCommit: JSON.parse(readFileSync(new URL('../vendor/core-source.json', import.meta.url), 'utf8')).commit, vendorManifest: hash(new URL('../vendor/core-source.json', import.meta.url)), snapshot: hash(snapshot), watch: hash(watchPath), featureCode: hash(new URL('../vendor/core/src/lib/personal-stage-model.ts', import.meta.url)) }, nights }), { flag: 'wx' })
 db.close()
 console.log(`${nights.length} sessions, ${new Set(nights.map(n => n.group)).size} night groups, ${nights.reduce((s, n) => s + n.rows.filter(r => r.y !== null).length, 0)} labeled epochs`)
