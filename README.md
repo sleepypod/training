@@ -410,6 +410,11 @@ versions, unsupported bin/rate/jerk settings, malformed columns, duplicate bins,
 invalid counts and inconsistent zones are refused. Optional raw samples remain
 under ignored `data/`; no health data belongs in fixtures or CI.
 
+`watch-motion-v2` adds per-bin `meanX`, `meanY` and `meanZ`; labels from v2
+captures carry `angleDeg`, the van Hees arm angle, with no threshold applied yet.
+Bins wholly outside the recorded span (leftovers that older Watch builds
+appended from a previous recording) are trimmed and counted in `trimmedBins`.
+
 ```sh
 uv run --locked python scripts/watch_motion.py data/watch/night1.json data/watch/night2.json --out data/watch/labels.json
 uv run --locked python scripts/movement.py train \

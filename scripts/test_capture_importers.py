@@ -55,7 +55,7 @@ def alignment():
 class WatchTests(unittest.TestCase):
     def test_roundtrip_gaps_thresholds_and_partial_bins(self):
         doc = json.loads(json.dumps(watch()))
-        self.assertEqual(wm.parse(doc), doc)
+        self.assertEqual(wm.parse(doc), {**doc, 'trimmedBins': 0})
         result = wm.labels(doc)
         self.assertEqual([r['intensity'] for r in result['labels']], ['still', 'light', 'vigorous'])
         rows = result['labels']
@@ -75,6 +75,34 @@ class WatchTests(unittest.TestCase):
                            ('maxJerk', [-1] * 4), ('startMs', [T + 1, T + 2000, T + 6000, T + 8000])]:
             doc = watch(); doc['bins'][key] = value
             with self.assertRaises(ValueError): wm.parse(doc)
+
+    def test_v2_axes_give_arm_angle_and_v1_axes_are_refused(self):
+        doc = watch(); doc['version'] = 'watch-motion-v2'
+        doc['bins'].update(meanX=[0, 0, 1, 0], meanY=[0, 0, 0, 0], meanZ=[1, -1, 0, 1])
+        rows = wm.labels(doc)['labels']
+        self.assertEqual([round(r['angleDeg']) for r in rows], [90, -90, 0])
+        self.assertEqual(wm.labels(doc)['format'], 'watch-motion-v2')
+        self.assertNotIn('angleDeg', wm.labels(watch())['labels'][0])
+        for bad in ({'meanX': [0] * 4, 'meanY': [0] * 4}, {'meanX': [0] * 3, 'meanY': [0] * 4, 'meanZ': [1] * 4},
+                    {'meanX': [0] * 4, 'meanY': [0] * 4, 'meanZ': [float('nan')] * 4}):
+            v2 = watch(); v2['version'] = 'watch-motion-v2'; v2['bins'].update(bad)
+            with self.assertRaises(ValueError): wm.parse(v2)
+        v1 = watch(); v1['bins'].update(meanX=[0] * 4, meanY=[0] * 4, meanZ=[1] * 4)
+        with self.assertRaisesRegex(ValueError, 'v2'): wm.parse(v1)
+
+    def test_bins_outside_the_span_are_trimmed_and_counted(self):
+        doc = watch()
+        for key, value in [('startMs', T - 74_000_000), ('samples', 64), ('meanMagnitude', 1), ('magnitudeVariance', 0),
+                           ('maxJerk', 0), ('movingSamples', 0)]:
+            doc['bins'][key].insert(0, value)
+        parsed = wm.parse(doc)
+        self.assertEqual(parsed['trimmedBins'], 1)
+        self.assertEqual(parsed['bins']['startMs'][0], T)
+        self.assertEqual(wm.labels(doc)['trimmedBins'], 1)
+        edge = watch(); edge['recordedFromMs'] = T + 500; del edge['raw']
+        self.assertEqual(wm.parse(edge)['trimmedBins'], 0)
+        gone = watch(); gone['bins']['startMs'] = [T + 20_000, T + 22_000, T + 26_000, T + 28_000]
+        with self.assertRaisesRegex(ValueError, 'No bins'): wm.parse(gone)
 
     def test_dst_offset_is_checked_at_start_and_split_exports_share_night(self):
         doc = watch(); doc['timeZone'] = 'America/Los_Angeles'

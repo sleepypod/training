@@ -1,17 +1,22 @@
-"""Import watch-motion-v1 as movement labels ONLY, never sleep-stage features.
+"""Import watch-motion-v1/v2 as movement labels ONLY, never sleep-stage features.
 
 Watch stages already use wrist acceleration: using these features to predict
 Watch stages leaks the label. Thresholds below are fixed before evaluation.
+v2 adds per-bin mean axes; labels then carry the arm angle (van Hees et al. 2015,
+PLoS ONE 10(11):e0142533) for position-change work. No angle threshold is applied yet.
 """
 import argparse
 import hashlib
 import json
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import capture_common as cc
 
 VERSION = 'watch-movement-labels-v1'
+FORMATS = ('watch-motion-v1', 'watch-motion-v2')
+AXES = ('meanX', 'meanY', 'meanZ')
 # Preregistered heuristic, not calibrated: fraction of samples with jerk >1 g/s.
 MIN_COVERAGE = .8
 MOVING_FRACTION = .05
@@ -19,7 +24,12 @@ VIGOROUS_FRACTION = .20
 
 
 def parse(doc):
-    if doc.get('version') != 'watch-motion-v1':
+    """Validate a capture and return it with bins wholly outside the recorded span removed.
+
+    Watch builds before the span fix could append leftover bins from an earlier
+    recording; those are trimmed and counted in trimmedBins, as the pod does.
+    """
+    if doc.get('version') not in FORMATS:
         raise ValueError('Unsupported Watch motion version')
     start = cc.number(doc.get('recordedFromMs'), 'recordedFromMs', 0, True)
     end = cc.number(doc.get('recordedToMs'), 'recordedToMs', 0, True)
@@ -35,8 +45,14 @@ def parse(doc):
             raise ValueError(f'Unsupported {key}; thresholds preregistered for {expected}')
     columns = ('startMs', 'samples', 'meanMagnitude', 'magnitudeVariance', 'maxJerk', 'movingSamples')
     bins = doc.get('bins', {})
-    if any(not isinstance(bins.get(k), list) for k in columns) or len({len(bins[k]) for k in columns}) != 1:
+    axes = AXES if doc['version'] == 'watch-motion-v2' else ()
+    if doc['version'] == 'watch-motion-v1' and any(k in bins for k in AXES):
+        raise ValueError('Axis columns require watch-motion-v2')
+    if any(not isinstance(bins.get(k), list) for k in columns + axes) or len({len(bins[k]) for k in columns + axes}) != 1:
         raise ValueError('Missing or mismatched bin columns')
+    for key in axes:
+        for value in bins[key]:
+            cc.number(value, key)
     previous = None
     for t, samples, magnitude, variance, jerk, moving in zip(*(bins[k] for k in columns)):
         cc.number(t, 'bin startMs', 0, True)
@@ -45,8 +61,8 @@ def parse(doc):
         for key, value in [('meanMagnitude', magnitude), ('magnitudeVariance', variance), ('maxJerk', jerk)]:
             cc.number(value, key, 0)
         # Edge bins may begin before the requested interval; clip them when labeling.
-        if t % 2000 or t + 2000 <= start or t >= end or previous is not None and t <= previous:
-            raise ValueError('Bins must be unique, ordered, on the 2s Unix grid, and overlap capture')
+        if t % 2000 or previous is not None and t <= previous:
+            raise ValueError('Bins must be unique, ordered and on the 2s Unix grid')
         if samples > 110 or moving >= samples or moving > 0 and jerk <= 1 or moving == 0 and jerk > 1:
             raise ValueError('Inconsistent sample counts or jerk summary')
         previous = t
@@ -60,7 +76,16 @@ def parse(doc):
             if not start <= row[0] <= end or previous is not None and row[0] < previous:
                 raise ValueError('Raw times outside capture or out of order')
             previous = row[0]
-    return doc
+    keep = [i for i, t in enumerate(bins['startMs']) if start - 2000 < t < end]
+    if not keep:
+        raise ValueError('No bins overlap the recorded span')
+    trimmed = {k: [v[i] for i in keep] for k, v in bins.items()}
+    return {**doc, 'bins': trimmed, 'trimmedBins': len(bins['startMs']) - len(keep)}
+
+
+def arm_angle(x, y, z):
+    """Angle of the Watch z-axis to the horizontal plane, degrees (van Hees 2015)."""
+    return math.degrees(math.atan2(z, math.hypot(x, y)))
 
 
 def night_key(doc):
@@ -75,15 +100,20 @@ def labels(doc, clock=None):
     cc.check_capture_clock(clock, doc['recordedFromMs'], doc['recordedToMs'])
     bins = doc['bins']
     out = []
-    for t, samples, moving in zip(bins['startMs'], bins['samples'], bins['movingSamples']):
+    angles = [arm_angle(*v) for v in zip(*(bins[k] for k in AXES))] if 'meanX' in bins else [None] * len(bins['startMs'])
+    for t, samples, moving, angle in zip(bins['startMs'], bins['samples'], bins['movingSamples'], angles):
         if samples < 100 * MIN_COVERAGE:
             continue  # Partial bins are unknown, not still.
         fraction = moving / samples
         intensity = 'vigorous' if fraction >= VIGOROUS_FRACTION else 'light' if fraction >= MOVING_FRACTION else 'still'
         a, b = max(t, doc['recordedFromMs']), min(t + 2000, doc['recordedToMs'])
-        out.append({'startMs': cc.align(a, clock), 'endMs': cc.align(b, clock),
-                    'moving': intensity != 'still', 'intensity': intensity, 'movingFraction': fraction})
+        row = {'startMs': cc.align(a, clock), 'endMs': cc.align(b, clock),
+               'moving': intensity != 'still', 'intensity': intensity, 'movingFraction': fraction}
+        if angle is not None:
+            row['angleDeg'] = angle
+        out.append(row)
     return {'version': VERSION, 'iosFormatRevision': cc.IOS_FORMAT_REVISION, 'night': night_key(doc), 'timeZone': doc['timeZone'],
+            'format': doc['version'], 'trimmedBins': doc['trimmedBins'],
             'clock': clock, 'labels': out, 'labelOrigin': 'watch-motion-heuristic',
             'thresholds': {'minimumCoverage': MIN_COVERAGE, 'movingFraction': MOVING_FRACTION,
                            'vigorousFraction': VIGOROUS_FRACTION},
