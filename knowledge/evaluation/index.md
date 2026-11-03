@@ -1,5 +1,6 @@
 # Evaluation
 
+- [Literature feature ablation: 2026-11-03](feature-ablation-2026-11-03.md) — On 23 night groups, temporal-context and arousal features from pod data raised light F1 from 0.68 to 0.75–0.78 and κ from 0.38 to 0.46–0.48; wake stayed at zero recall, limited by 36 noisy Watch wake epochs.
 - [Piezo bandwidth gate: 2026-10-22](piezo-bandwidth-2026-10-22.md) — In one scripted session on one pod, imitated snoring raised raw piezo energy in both snore bands well above the pass bar; a 10-hour night had full coverage at about 13 MB/hour archived. Real snoring is untested.
 - [Sequence decoding: 2026-10-21](sequence-decoding-2026-10-21.md) — On 10 nights, dropping smoothing or Viterbi decoding gained about 0.02 macro F1; on 13 nights neither gain held, and no decoder showed a statistically supported improvement over production smoothing.
 - [Light-sleep confusion: 2026-10-21](light-sleep-confusion-2026-10-21.md) — In this one-participant evaluation, light is the hub stage that REM and deep collapse into; current features barely separate light from REM.
