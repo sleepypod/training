@@ -269,6 +269,15 @@ uv run --locked python scripts/feature-ablation.py data/runs/RUN/features.json \
   --snapshot data/biometrics.db --out data/runs/ablation
 ```
 
+Chronological backtest of the same feature sets: refit before each night on
+earlier nights only (walk-forward) and fit once on the first nights (frozen),
+scored against the stages the pod recorded live:
+
+```sh
+uv run --locked python scripts/stage-backtest.py data/runs/RUN/features.json \
+  --snapshot data/biometrics.db --out data/runs/backtest
+```
+
 ## Save and reuse a model
 
 Every successful run automatically saves `model/candidate.json` (portable pod
