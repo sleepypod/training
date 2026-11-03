@@ -228,6 +228,11 @@ uv run --locked python scripts/train.py \
   --out data/runs/experiment-001
 ```
 
+`--contract podContext` trains on the 33-column contract (the ten `podNative`
+features plus context, movement-bout and arousal features from
+`scripts/feature-ablation.py`). Pods need core with `podContext` support (core#907)
+to accept and evaluate such a model; `podNative` remains the default.
+
 The output directory must not already exist. Use `--source 'Watch'` to choose a
 case-insensitive Health source-name substring. To reuse extracted labels, replace
 `--watch-export` with `--watch-json data/watch.json` (schema in [input data](docs/input-data.md)).
