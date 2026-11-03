@@ -1,7 +1,7 @@
 ---
 type: "Experimental finding"
 title: "Literature feature ablation: 2026-11-03"
-description: "On 23 night groups, temporal-context and arousal features from pod data raised light F1 from 0.68 to 0.75–0.78 and κ from 0.38 to 0.46–0.48; wake stayed at zero recall, limited by 36 noisy Watch wake epochs."
+description: "On 23 night groups, temporal-context and arousal features from pod data raised light F1 from 0.68 to 0.75–0.78 and κ from 0.38 to 0.46–0.48; a chronological backtest kept the gain, with the flat forest the balanced choice. Wake stayed at zero recall."
 status: "draft"
 generated: {"by": "claude/opus-5.5", "at": "2026-11-03T16:30:00+00:00"}
 sources: [{"resource": "Local run ablation-20261103: report.json and protocol.json under ignored data/runs/, from scripts/feature-ablation.py", "title": "Feature ablation report"}, {"resource": "Local run baseline-20261103 (60-day left-side pod fetch, 23 night groups): model/report.json and features.json under ignored data/runs/", "title": "Baseline nested retrain"}, {"resource": "Walch et al. 2019, SLEEP 42(12) zsz180; Fonseca et al. 2020, SLEEP 43(9) zsaa048; Radha et al. 2019, Sci Rep 9:14149; Kortelainen et al. 2010, IEEE TITB 14(3):776–785; Willemen et al. 2014, IEEE JBHI 18(2):661–669; van Hees et al. 2015, PLoS ONE 10(11):e0142533; Schyvens et al. 2025, SLEEP Advances 6(2) zpaf021", "title": "Papers the feature groups follow"}, {"resource": "/evaluation/light-sleep-confusion-2026-10-21.md", "title": "Light-sleep confusion baseline"}]
@@ -41,6 +41,19 @@ The groups follow these papers, translated to pod signals:
 - **Hierarchical** (Kortelainen 2010): wake versus sleep, then staging without wake.
 
 The wake ceiling is most plausibly labels, not features: 36 single-label 5-minute epochs, and consumer watches detect wake poorly (Apple Watch Series 8 wake specificity about 52% against polysomnography, Schyvens 2025).
+
+## Measured: chronological backtest
+
+`scripts/stage-backtest.py` refits before each night on earlier nights only (walk-forward, minimum 8 training nights, 15 test nights), and separately fits once on the first 8 nights without refitting (frozen). The pod's live model (`container-forest-20261021T2112`, trained 2026-10-21) has seen the earlier nights, so it is compared only on the 11 nights from 2026-10-21 to 2026-11-01. Per-night means:
+
+| On 11 nights after 2026-10-21 | κ | Macro F1 | Light F1 | Deep F1 | REM F1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pod live model | 0.39 | 0.45 | 0.70 | 0.47 | 0.62 |
+| base forest, walk-forward | 0.37 | 0.43 | 0.67 | 0.42 | 0.64 |
+| all, walk-forward | 0.48 | 0.49 | 0.74 | 0.52 | 0.70 |
+| hierarchical, walk-forward | 0.49 | 0.48 | 0.78 | 0.43 | 0.71 |
+
+Against the same forest on current features, `all` improved every sleep stage on these nights (deep 8/1 nights, sign test p=0.04; REM 10/1, p=0.01; macro F1 +0.058 [+0.028, +0.086]). Against the live model, `all` was higher on every stage, but no single difference was statistically supported over 11 nights. Without leave-one-out's later nights, the hierarchy lost deep (walk-forward over 15 nights: −0.054 [−0.135, +0.020]), so the flat `all` forest is the balanced candidate. Frozen 8-night models were weaker throughout (base κ 0.29), so periodic retraining matters at this data size.
 
 ## Proposed next steps
 
