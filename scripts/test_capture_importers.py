@@ -124,6 +124,20 @@ class WatchTests(unittest.TestCase):
             with self.assertRaises(ValueError): wm.main([str(source), '--out', str(out)])
         with self.assertRaises(ValueError): cc.data_path('/tmp/not-data.json')
 
+    def test_combined_export_imports_each_night_once(self):
+        root = Path(__file__).resolve().parents[1] / 'data'
+        root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as tmp:
+            later = {**watch(), 'recordedFromMs': T + 86_400_000, 'recordedToMs': T + 86_410_000, 'raw': [],
+                     'bins': {**watch()['bins'], 'startMs': [t + 86_400_000 for t in watch()['bins']['startMs']]}}
+            combined = Path(tmp) / 'watch-motion-all.json'; combined.write_text(json.dumps([watch(), later]))
+            single = Path(tmp) / 'watch.json'; single.write_text(json.dumps(watch()))
+            out = Path(tmp) / 'labels.json'
+            wm.main([str(combined), str(single), '--out', str(out)])
+            self.assertEqual([d['labels'][0]['startMs'] for d in json.loads(out.read_text())], [T, T + 86_400_000])
+            bad = Path(tmp) / 'bad.json'; bad.write_text('[1]')
+            with self.assertRaises(ValueError): wm.main([str(bad), '--out', str(Path(tmp) / 'x.json')])
+
     def test_watch_windows_hold_out_whole_nights_and_keep_gaps(self):
         rows = [{'x': [i % 2], 'label': 'light' if i % 2 else 'still', 'baseline': i % 2,
                  'session': f'file{i}', 'night': 'one', 'watch': True, 'group': f'g{i}'} for i in range(8)]

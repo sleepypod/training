@@ -138,6 +138,23 @@ def label_window(start, end, rows):
     return None
 
 
+def captures(path):
+    """Yield (capture, sha256) from one capture file or the iOS "Export all" array of them.
+
+    A single capture hashes its file bytes, as before; an array element hashes its
+    canonical JSON, so the same night exported both ways is still imported once.
+    """
+    raw = path.read_bytes()
+    doc = json.loads(raw)
+    if isinstance(doc, list):
+        for item in doc:
+            if not isinstance(item, dict):
+                raise ValueError('Combined export must be an array of captures')
+            yield item, hashlib.sha256(json.dumps(item, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    else:
+        yield doc, hashlib.sha256(raw).hexdigest()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('files', nargs='+')
@@ -149,12 +166,14 @@ def main(argv=None):
     clock = cc.load_alignment(json.loads(cc.data_path(args.alignment).read_text())) if args.alignment else None
     docs, seen = [], set()
     for filename in args.files:
-        path = cc.data_path(filename)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest in seen:
-            continue
-        seen.add(digest)
-        docs.append({**labels(json.loads(path.read_text()), clock), 'sourceSha256': digest})
+        for doc, digest in captures(cc.data_path(filename)):
+            key = (doc.get('device'), doc.get('recordedFromMs'), doc.get('recordedToMs'))
+            if digest in seen or key in seen:
+                continue
+            seen.update((digest, key))
+            docs.append({**labels(doc, clock), 'sourceSha256': digest})
+    if clock and len(docs) != 1:
+        ap.error('Use one capture per alignment file')
     out = cc.data_path(args.out)
     if out.exists():
         raise ValueError('Output already exists')

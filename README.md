@@ -428,6 +428,10 @@ under ignored `data/`; no health data belongs in fixtures or CI.
 captures carry `angleDeg`, the van Hees arm angle, with no threshold applied yet.
 Bins wholly outside the recorded span (leftovers that older Watch builds
 appended from a previous recording) are trimmed and counted in `trimmedBins`.
+`watch_motion.py` also takes the iOS **Export all** file (`watch-motion-all-*.json`,
+an array of captures); a night that appears in it and in a single-night file is
+imported once. `movement.py --watch-motion` still pairs one single-night file
+with one archive.
 
 ```sh
 uv run --locked python scripts/watch_motion.py data/watch/night1.json data/watch/night2.json --out data/watch/labels.json
