@@ -62,6 +62,8 @@ class FetchTests(unittest.TestCase):
             if path.endswith('sleep-stages'): return {'sleepRecordId': 1, 'epochs': [{'start': start, 'duration': 300000, 'stage': 'light'}], 'stageView': view}
             if path.endswith('vitals'): return [{'id': 3, 'side': 'left', 'timestamp': iso(start), 'heartRate': 60, 'hrv': 25, 'breathingRate': 14}]
             if path.endswith('movement'): return [{'id': 4, 'side': 'left', 'timestamp': iso(start), 'totalMovement': 2}]
+            if path.endswith('reference-capabilities'): return {'metrics': [{'metric': 'hrv_rmssd'}]}
+            if path.endswith('reference-samples'): return [{'timestamp': iso(start), 'endTimestamp': iso(start + 300000), 'value': 19, 'device': 'Watch8,2', 'algorithm': '3'}]
             if path.endswith('reference-stages'): return [{'id': 5, 'side': 'left', 'source': 'apple_watch', 'start': iso(start), 'end': iso(start + 300000), 'stage': 'light'}]
             raise AssertionError(path)
         with tempfile.TemporaryDirectory() as d, patch.object(Pod, 'get', side_effect=get):
@@ -70,6 +72,7 @@ class FetchTests(unittest.TestCase):
             with sqlite3.connect(db) as conn:
                 self.assertEqual(conn.execute('select count(*) from sleep_records').fetchone()[0], 1)
                 self.assertEqual(conn.execute('select heart_rate from vitals').fetchone()[0], 60)
+                self.assertEqual(conn.execute('select metric, value, device, algorithm from reference_samples').fetchone(), ('hrv_rmssd', 19, 'Watch8,2', '3'))
             self.assertEqual(tz, 'UTC')
             self.assertEqual(json.loads(watch.read_text())['stages'][0][2], 'light')
             self.assertIn('not an atomic', json.loads((Path(d) / 'acquisition.json').read_text())['consistency'])

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
@@ -63,6 +64,27 @@ class Pod:
         (self.output / name).write_bytes(raw)
         self.requests.append({'path': path, 'params': params, 'file': name, 'sha256': hashlib.sha256(raw).hexdigest(), 'fetchedAt': iso(datetime.now(timezone.utc).timestamp() * 1000)})
         return data
+
+    def optional(self, path, **params):
+        """A route a pod on older software may not have; None there instead of an error."""
+        try:
+            return self.get(path, **params)
+        except urllib.error.HTTPError as error:
+            if error.code in (400, 404):
+                return None
+            raise
+
+    def samples(self, metric, side, start, end, limit=20000):
+        """One optional wearable metric, bisected like `range`; these rows carry no id or side."""
+        rows = self.optional('biometrics/reference-samples', side=side, metric=metric, startDate=iso(start), endDate=iso(end), limit=limit)
+        if rows is None:
+            return []
+        if len(rows) >= limit:
+            if end - start < 1:
+                raise ValueError(f'{metric}: API limit reached at one timestamp; cannot fetch complete data')
+            mid = (start + end) // 2
+            rows = self.samples(metric, side, start, mid, limit) + self.samples(metric, side, mid + 1, end, limit)
+        return list({row['timestamp']: row for row in rows}.values())
 
     def range(self, path, side, start, end, limit):
         """Bisect inclusive time windows on saturation; never silently drop a full page."""
@@ -130,6 +152,10 @@ def fetch(address, side, days, output, time_zone=None, fetch_watch=True, now=Non
         raise ValueError('Stage configuration/calibration changed during fetch; retry')
     if fetch_watch and not refs:
         raise ValueError('No imported Watch labels on this pod; pass --watch-export or --watch-json')
+    # Older pods have no capabilities route but do hold these two.
+    capabilities = pod.optional('biometrics/reference-capabilities') or {}
+    metrics = [m['metric'] for m in capabilities.get('metrics', [])] or ['breathing_rate', 'hrv_sdnn']
+    samples = [(metric, row) for metric in metrics for row in pod.samples(metric, side, start, end)]
     (output / 'pod-stages.json').write_text(json.dumps({'source': 'pod-api', 'stageView': view, 'sessions': pod_stages}))
     snapshot = output / 'biometrics.db'
     with sqlite3.connect(snapshot) as db:
@@ -139,19 +165,23 @@ def fetch(address, side, days, output, time_zone=None, fetch_watch=True, now=Non
         CREATE TABLE sleep_records(id INTEGER,side TEXT,entered_bed_at INTEGER,left_bed_at INTEGER);
         CREATE TABLE vitals(side TEXT,timestamp INTEGER,heart_rate REAL,hrv REAL,breathing_rate REAL);
         CREATE TABLE movement(side TEXT,timestamp INTEGER,total_movement REAL);
+        CREATE TABLE reference_samples(side TEXT,metric TEXT,timestamp INTEGER,end_timestamp INTEGER,value REAL,device TEXT,algorithm TEXT);
         ''')
         db.execute('INSERT INTO biometric_runtime_configs VALUES (?,?,?)', (side, 1, json.dumps({'resolved': {'sleep_stages': {'ruleset': rules}}})))
         db.execute('INSERT INTO calibration_profiles VALUES (?,?,?)', (side, 'piezo', quality))
         db.executemany('INSERT INTO sleep_records VALUES (?,?,?,?)', [(r['id'], side, millis(r['enteredBedAt']) / 1000, millis(r['leftBedAt']) / 1000) for r in records])
         db.executemany('INSERT INTO vitals VALUES (?,?,?,?,?)', [(side, millis(r['timestamp']) / 1000, r['heartRate'], r['hrv'], r['breathingRate']) for r in vitals.values()])
         db.executemany('INSERT INTO movement VALUES (?,?,?)', [(side, millis(r['timestamp']) / 1000, r['totalMovement']) for r in movement.values()])
+        db.executemany('INSERT INTO reference_samples VALUES (?,?,?,?,?,?,?)', [
+            (side, metric, millis(r['timestamp']) / 1000, millis(r['endTimestamp']) / 1000 if r.get('endTimestamp') else None, r['value'], r.get('device'), r.get('algorithm'))
+            for metric, r in samples])
     watch = output / 'watch.json'
     if fetch_watch:
         if any(r.get('source') != 'apple_watch' for r in refs.values()):
             raise ValueError('Unexpected reference source; expected apple_watch')
         watch.write_text(json.dumps({'stages': [[millis(r['start']), millis(r['end']), r['stage']] for r in refs.values()]}))
     manifest = {'baseUrl': pod.base, 'side': side, 'timezone': time_zone, 'range': [iso(start), iso(end)], 'stageView': view,
-                'quality': quality, 'requests': pod.requests, 'counts': {'sessions': len(records), 'vitals': len(vitals), 'movement': len(movement), 'referenceStages': len(refs)},
+                'quality': quality, 'requests': pod.requests, 'counts': {'sessions': len(records), 'vitals': len(vitals), 'movement': len(movement), 'referenceStages': len(refs), 'referenceSamples': len(samples)},
                 'consistency': 'Completed sessions fetched over multiple HTTP reads; not an atomic database snapshot.'}
     (output / 'acquisition.json').write_text(json.dumps(manifest, indent=2))
     update('Fetching', f'Downloaded {len(records)} completed sessions', fetchedSessions=len(records))
