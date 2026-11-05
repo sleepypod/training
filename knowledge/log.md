@@ -1,5 +1,9 @@
 # Knowledge update log
 
+## 2026-11-04
+
+- **Creation**: Captured [reference devices](data/reference-devices.md): wearable measurements are optional, compared per device and never model features.
+
 ## 2026-10-22
 
 - **Update**: Added the 13-night rerun to [sequence decoding](evaluation/sequence-decoding-2026-10-21.md); the 10-night decoder gains did not hold.

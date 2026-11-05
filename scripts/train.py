@@ -106,6 +106,14 @@ def main():
         run(sys.executable, str(ROOT / 'scripts/retrain-models.py'), str(features), '--out', str(model))
         update('Parity', 'Checking every exported prediction in TypeScript')
         run(tsx, str(ROOT / 'scripts/verify-portable.ts'), str(model))
+        agreement = [sys.executable, str(ROOT / 'scripts/reference_agreement.py'), '--snapshot', str(snapshot), '--side', args.side,
+                     '--source', args.source, '--out', str(output / 'reference-agreement.json')]
+        update('References', 'Comparing the pod with what the wearable measured')
+        try:
+            run(*agreement, *(['--export', str(args.watch_export.resolve())] if args.watch_export else []))
+        except subprocess.CalledProcessError:
+            # Wearable values are optional and never reach the model, so a problem here can't fail a run.
+            print('Reference comparison skipped', flush=True)
         update('Complete', 'Training and parity passed. Model saved locally; no activation.', status='complete')
         write_report(output)
         print(f'Report: {output / "index.html"}', flush=True)
