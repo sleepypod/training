@@ -19,3 +19,4 @@ test-results/
 *.onnx
 
 node_modules/
+.claude/settings.local.json
