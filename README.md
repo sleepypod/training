@@ -363,8 +363,10 @@ print first. `--storage` is a saved `GET /api/system/storage`; without it the ol
 estimated from the first pull. Decoded coverage is cached by RAW SHA-256 in
 `data/cache/raw-coverage/`.
 
-`lineage.py` reports which vitals engine and profile produced each night's stored vitals
-(`mixed` when a night spans a change), the core build from the first pull after the night,
+`lineage.py` reports which vitals engine and profile produced each night's stored vitals,
+with core's identity: each row's live processing run (manifest hash and config hash). A night
+with more than one identity, or only partly recorded, is `mixed`; one with no recorded run is
+`unknown`. It also reports the core build from the first pull after the night,
 and the stage-model selection from an optional saved `GET /api/sleep-stages/models?side=`
 (`--stage-models left=FILE`); the pod restages on read.
 

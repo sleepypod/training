@@ -43,6 +43,7 @@ CREATE TABLE archive_raw_files (sha256 TEXT PRIMARY KEY NOT NULL, name TEXT NOT 
   mtime_ms INTEGER NOT NULL, bytes INTEGER NOT NULL, pull_key TEXT NOT NULL);
 '''
 HOUR = 3600
+ENGINE, PROFILE_A, PROFILE_B = 'e' * 64, 'a' * 64, 'b' * 64
 
 
 def ts(value):
@@ -86,22 +87,18 @@ def synthetic_archive(root):
         db.execute('insert into archive_raw_files values (?, ?, ?, ?, ?, ?)', (sha, name, name, (start + 1800 + 900) * 1000, len(body), 'p'))
     # A daytime file far from any night is never decoded.
     db.execute('insert into archive_raw_files values (?, ?, ?, ?, ?, ?)', ('f' * 64, 'X.RAW.gz', 'X.RAW.gz', ts('2026-11-13T09:00') * 1000, 1, 'p'))
-    for run, config, generation in (('run-a', 'prof-a', 1), ('run-b', 'prof-b', 2), ('run-c', 'prof-a', 1)):
-        db.execute("insert into biometric_processing_runs values (?, 'left', 'live', ?, ?, null, '{}', 0, null)",
-                   (run, json.dumps({'manifestHash': 'engine-1', 'generation': generation}), config))
-    for minute in range(60):
-        db.execute('insert into vitals (side, timestamp, heart_rate, processing_run_id) values (?, ?, ?, ?)',
-                   ('left', archived + minute * 60, 60, 'run-a' if minute < 30 else 'run-b'))
-        db.execute('insert into vitals (side, timestamp, heart_rate, processing_run_id) values (?, ?, ?, ?)',
-                   ('left', NIGHTS['2026-11-10'] + minute * 60, 60, 'run-c'))
-        db.execute('insert into vitals (side, timestamp, heart_rate) values (?, ?, ?)', ('left', NIGHTS['2026-11-15'] + minute * 60, 60))
-    # 2026-11-15 has no processing runs: receipts say generation 2 took effect half way through.
-    for generation, resolved in ((1, 'prof-a'), (2, 'prof-b')):
-        db.execute("insert into biometric_runtime_configs values ('left', ?, ?, ?, 'immediate', 0)",
-                   (generation, resolved, json.dumps({'manifestHash': 'engine-1', 'resolvedHash': resolved})))
-        effective = (NIGHTS['2026-11-15'] - 86400 if generation == 1 else NIGHTS['2026-11-15'] + 1800) * 1000
-        for component in ln.VITALS_COMPONENTS:
-            db.execute("insert into biometric_runtime_receipts values ('left', ?, ?, ?, ?, 'applied', null, 0)", (component, generation, resolved, effective))
+    # Core's identity: a live same-side run's manifestHash:config_hash. run-c restarts run-a's config.
+    for run, side, kind, config in (('run-a', 'left', 'live', PROFILE_A), ('run-b', 'left', 'live', PROFILE_B), ('run-c', 'left', 'live', PROFILE_A),
+                                    ('run-shadow', 'left', 'shadow', PROFILE_A), ('run-right', 'right', 'live', PROFILE_A)):
+        db.execute("insert into biometric_processing_runs values (?, ?, ?, ?, ?, null, '{}', 0, null)",
+                   (run, side, kind, json.dumps({'manifestHash': ENGINE, 'generation': 1}), config))
+    db.execute("insert into biometric_processing_runs values ('run-bad', 'left', 'live', 'not json', ?, null, '{}', 0, null)", (PROFILE_A,))
+    runs = {'2026-11-14': ('run-a', 'run-b'), '2026-11-10': ('run-a', 'run-c'), '2026-11-12': ('run-shadow', None),
+            '2026-11-15': ('run-bad', 'run-right'), '2026-11-20': ('run-a', None)}
+    for night, (first, second) in runs.items():
+        for minute in range(61):  # Inclusive of the minute the sleep record ends.
+            db.execute('insert into vitals (side, timestamp, heart_rate, processing_run_id) values (?, ?, ?, ?)',
+                       ('left', NIGHTS[night] + minute * 60, 60, first if minute < 30 else second))
     db.execute("insert into reference_imports values ('live', null), ('gone', 1)")
     db.execute("insert into reference_stages (side, source, start, \"end\", stage, import_id) values ('left', 'apple_watch', ?, ?, 'light', 'live')",
                (archived, archived + 300))
@@ -157,11 +154,13 @@ class ArchiveIndexTests(unittest.TestCase):
                          dict(stages='pod', heartRate='pod', breathingRate='pod', hrvSdnn=None, motion='pod'))
         self.assertEqual(archived['watchMissing'], ['hrvSdnn'])
         self.assertIn('stages', lost['watchMissing'], 'rows of a deleted import are not a teacher')
-        vitals = archived['lineage']['vitals']
-        self.assertEqual((vitals['method'], vitals['mixed'], [v['minutes'] for v in vitals['versions']]), ('processing-runs', True, [30, 30]))
-        self.assertEqual((local['lineage']['vitals']['profile'], local['lineage']['vitals']['mixed']), ('prof-a', False))
-        receipts = risky['lineage']['vitals']
-        self.assertEqual((receipts['method'], receipts['mixed']), ('runtime-receipts', True))
+        identities = {night: n['lineage']['vitals'] for night, n in nights.items()}
+        self.assertEqual((identities['2026-11-14']['identity'], [v['minutes'] for v in identities['2026-11-14']['versions']]), ('mixed', [31, 30]))
+        self.assertEqual(identities['2026-11-10']['identity'], dict(engine=ENGINE, profile=PROFILE_A), 'a restart keeps the identity')
+        self.assertEqual(identities['2026-11-10']['mixed'], False)
+        self.assertEqual(identities['2026-11-12']['identity'], 'unknown', 'a shadow run is not live vitals')
+        self.assertEqual(identities['2026-11-15']['identity'], 'unknown', 'a malformed bundle or another side\'s run has no identity')
+        self.assertEqual((identities['2026-11-20']['identity'], identities['2026-11-20']['unknownMinutes']), ('mixed', 31), 'partly recorded')
         self.assertEqual(archived['lineage']['build']['commit'], 'abc1234def')
 
     def test_at_risk_nights_print_first(self):

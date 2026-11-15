@@ -1,10 +1,12 @@
 """Night lineage (plan A1b): which version of each model-graph node produced a night's stored outputs.
 
-  vitals  engine (biometrics manifest hash) and profile (resolved config hash) for each
-          stored vitals minute. Exact from vitals.processing_run_id → biometric_processing_runs
-          where the pod recorded it; otherwise the generation active at each minute from
-          biometric_runtime_receipts (latest adoption at or before the minute) joined to
-          biometric_runtime_configs. A night with more than one version is `mixed`.
+  vitals  the identity core gives each vitals row (sleepypod/core#930): its processing run
+          (vitals.processing_run_id → biometric_processing_runs, kind 'live', same side), engine =
+          the run's bundle manifestHash, profile = its config_hash. A restart under the same
+          config is a new run with the same identity. A night whose window holds more than one
+          identity, or rows with and without one, is `mixed`; one with no recorded run is
+          `unknown`. Runtime receipts and configs can't stand in: they don't name the running
+          engine, and the default profile (generation 0) has neither.
   build   core commit from the first archive pull after the night (pulls/*.json manifest
           `build`): the build serving the export, an upper bound on the one that recorded it.
   stage   the pod restages on read, so stored stages follow the selection at read time,
@@ -13,7 +15,6 @@
 Reads local files only: the archive's biometrics.db and pull records.
 """
 import argparse
-from collections import Counter
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -21,7 +22,12 @@ import sqlite3
 import sys
 from zoneinfo import ZoneInfo
 
-VITALS_COMPONENTS = ('heart_rate', 'breathing_rate', 'hrv_index')
+# Core's vitals identity (src/biometrics/profiles/vital-summary-provenance.ts, sleepypod/core#930):
+# `<manifestHash>:<configHash>` of the live same-side run that produced a vitals row, else NULL.
+MANIFEST = "CASE WHEN json_valid(r.bundle) THEN json_extract(r.bundle, '$.manifestHash') END"
+LIVE = "(r.kind = 'live' AND length(r.config_hash) = 64 AND r.config_hash NOT GLOB '*[^a-f0-9]*')"
+CONFIGURATION = (f"CASE WHEN {LIVE} AND typeof({MANIFEST}) = 'text' AND length({MANIFEST}) = 64 "
+                 f"AND {MANIFEST} NOT GLOB '*[^a-f0-9]*' THEN {MANIFEST} || ':' || r.config_hash END")
 
 
 def connect(path):
@@ -41,76 +47,42 @@ def night_of(entered_s, time_zone):
     return (datetime.fromtimestamp(entered_s, ZoneInfo(time_zone)) - timedelta(hours=12)).date().isoformat()
 
 
-def _json(value):
-    try:
-        return json.loads(value) if isinstance(value, (str, bytes)) else value
-    except ValueError:
-        return None
-
-
-def _summary(minutes, method):
-    """versions: [(engine, profile, generation), minutes] with None for an unknown part."""
-    known = [(k, n) for k, n in minutes.items() if k[0] is not None or k[1] is not None]
-    unknown = sum(n for k, n in minutes.items() if k[0] is None and k[1] is None)
-    versions = [dict(engine=e, profile=p, generation=g, minutes=n) for (e, p, g), n in sorted(known, key=lambda kv: -kv[1])]
-    distinct = {(v['engine'], v['profile']) for v in versions}
-    one = versions[0] if len(distinct) == 1 else None
-    return dict(method=method, engine=one and one['engine'], profile=one and one['profile'],
-                generation=one and one['generation'], mixed=len(distinct) > 1 if versions else None,
-                versions=versions, unknownMinutes=unknown)
+def summary(groups):
+    """Core's nightVitalsIdentity over {identity or None: rows}: one identity, `mixed`, `unknown`, or None without vitals."""
+    if not groups:
+        identity = None
+    elif len(groups) > 1:
+        identity = 'mixed'  # A change mid-night, or a night only partly recorded.
+    else:
+        only = next(iter(groups))
+        identity = 'unknown' if only is None else dict(zip(('engine', 'profile'), only.split(':')))
+    versions = [dict(zip(('engine', 'profile'), k.split(':')), minutes=n) for k, n in sorted(groups.items(), key=lambda kv: -kv[1]) if k]
+    one = identity if isinstance(identity, dict) else {}
+    return dict(method='processing-runs', identity=identity, engine=one.get('engine'), profile=one.get('profile'),
+                mixed=None if identity is None else identity == 'mixed', versions=versions, unknownMinutes=groups.get(None, 0))
 
 
 class Lineage:
-    """Per-night lineage over one archive database; tolerant of snapshots without the provenance tables."""
+    """Per-night vitals identity over one archive database; rows without a recorded live run are unknown."""
 
     def __init__(self, db):
         self.db = db
         names = tables(db)
         self.has_vitals = 'vitals' in names
         self.has_runs = self.has_vitals and 'biometric_processing_runs' in names and 'processing_run_id' in columns(db, 'vitals')
-        self.has_receipts = {'biometric_runtime_receipts', 'biometric_runtime_configs'} <= names
-        self.runs, self.configs, self.adoptions = {}, {}, {}
-        if self.has_runs:
-            for run_id, bundle, config_hash in db.execute('select id, bundle, config_hash from biometric_processing_runs'):
-                bundle = _json(bundle) or {}
-                self.runs[run_id] = (bundle.get('manifestHash'), config_hash, bundle.get('generation'))
-        if self.has_receipts and {'resolved_hash', 'payload'} <= columns(db, 'biometric_runtime_configs'):
-            for side, generation, resolved_hash, payload in db.execute(
-                    'select side, generation, resolved_hash, payload from biometric_runtime_configs'):
-                self.configs[(side, generation)] = ((_json(payload) or {}).get('manifestHash'), resolved_hash)
-            for side, component, generation, effective in db.execute(
-                    "select side, component, generation, effective_sample_time_ms from biometric_runtime_receipts "
-                    "where state = 'applied' and effective_sample_time_ms is not null order by effective_sample_time_ms"):
-                if component in VITALS_COMPONENTS:
-                    self.adoptions.setdefault((side, component), []).append((effective, generation))
 
     def vitals(self, side, start_s, end_s):
+        """Identity of the side's vitals rows in [start_s, end_s], inclusive like core."""
         if not self.has_vitals:
-            return _summary({}, 'unavailable')
+            return summary({})
         if self.has_runs:
-            rows = self.db.execute('select processing_run_id, count(*) from vitals where side=? and timestamp>=? and timestamp<? '
-                                   'group by processing_run_id', (side, start_s, end_s)).fetchall()
-            if any(run_id is not None for run_id, _ in rows):
-                minutes = Counter()
-                for run_id, n in rows:
-                    minutes[self.runs.get(run_id, (None, None, None)) if run_id else (None, None, None)] += n
-                return _summary(minutes, 'processing-runs')
-        if self.adoptions.get((side, 'heart_rate')):
-            stamps = [t for (t,) in self.db.execute('select timestamp from vitals where side=? and timestamp>=? and timestamp<?',
-                                                     (side, start_s, end_s))]
-            minutes = Counter()
-            for t in stamps:
-                versions = set()
-                for component in VITALS_COMPONENTS:
-                    adopted = [g for effective, g in self.adoptions.get((side, component), []) if effective <= t * 1000]
-                    generation = adopted[-1] if adopted else 0
-                    engine, profile = self.configs.get((side, generation), (None, 'defaults' if generation == 0 else None))
-                    versions.add((engine, profile, generation))
-                # Components on different generations in the same minute are a version of their own.
-                key = versions.pop() if len(versions) == 1 else (None, 'components-disagree', None)
-                minutes[key] += 1
-            return _summary(minutes, 'runtime-receipts')
-        return _summary({}, 'unavailable')
+            rows = self.db.execute(f'select {CONFIGURATION}, count(*) from vitals v left join biometric_processing_runs r '
+                                   'on v.processing_run_id = r.id and v.side = r.side '
+                                   'where v.side = ? and v.timestamp >= ? and v.timestamp <= ? group by 1', (side, start_s, end_s)).fetchall()
+        else:
+            rows = self.db.execute('select null, count(*) from vitals where side = ? and timestamp >= ? and timestamp <= ? having count(*) > 0',
+                                   (side, start_s, end_s)).fetchall()
+        return summary(dict(rows))
 
 
 def load_pulls(pod_dir):
@@ -155,9 +127,12 @@ def short(value):
 
 
 def vitals_label(v):
-    if v['mixed']:
-        return f"mixed ({len({(x['engine'], x['profile']) for x in v['versions']})})"
-    if v['mixed'] is None:
+    identity = v['identity']
+    if identity is None:
+        return 'no vitals'
+    if identity == 'mixed':
+        return f"mixed ({len(v['versions'])}{' + unrecorded' if v['unknownMinutes'] else ''})"
+    if identity == 'unknown':
         return 'unknown'
     return f"{short(v['engine'])}/{short(v['profile'])}"
 
@@ -205,10 +180,9 @@ def main(argv=None):
     if args.json:
         print(json.dumps(rows, indent=2))
         return
-    print(f"{'night':10} {'side':5} {'vitals engine/profile':22} {'method':17} {'build':8} stage")
+    print(f"{'night':10} {'side':5} {'vitals engine/profile':24} {'build':8} stage")
     for r in rows:
-        v = r['vitals']
-        print(f"{r['night']:10} {r['side']:5} {vitals_label(v):22} {v['method']:17} {short(r['build']['commit']):8} "
+        print(f"{r['night']:10} {r['side']:5} {vitals_label(r['vitals']):24} {short(r['build']['commit']):8} "
               f"{r['stage']['version'] or '-'}")
     versions = {(x['engine'], x['profile']) for r in rows for x in r['vitals']['versions']}
     print(f"{len(rows)} nights, {sum(1 for r in rows if r['vitals']['mixed'])} mixed, {len(versions)} vitals versions")
