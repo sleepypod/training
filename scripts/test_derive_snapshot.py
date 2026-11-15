@@ -46,14 +46,15 @@ def reading(t, side='left', config=PROFILE, **changes):
             'limitations': [], **changes}
 
 
-def replay(directory, rows, night='2026-10-25', window=(START, START + 1200), skipped=()):
+def replay(directory, rows, night='2026-10-25', window=(START, START + 1200), skipped=(), parity=None):
     (directory / 'readings').mkdir(parents=True)
     name = f'readings/{night}-{PROFILE[:12]}.json'
     (directory / name).write_text(json.dumps({'cohortId': night, 'configHash': PROFILE, 'side': 'left', 'readings': rows}))
     (directory / 'replay.json').write_text(json.dumps({
         'version': 'biometrics-local-fit-replay-v1', 'side': 'left', 'timezone': TZ, 'engine': {'manifestHash': ENGINE},
         'config': {'source': 'defaults', 'overrides': [], 'configHash': PROFILE},
-        'nights': [{'night': night, 'scoreStartMs': window[0] * 1000, 'scoreEndMs': window[1] * 1000, 'readingsFile': name}],
+        'nights': [{'night': night, 'scoreStartMs': window[0] * 1000, 'scoreEndMs': window[1] * 1000, 'readingsFile': name,
+                    **({'parity': {'gate': parity}} if parity else {})}],
         'skipped': [{'night': n, 'reason': 'the archive holds no RAW file written during the night'} for n in skipped]}))
     return directory
 
@@ -133,6 +134,12 @@ class DeriveSnapshotTests(unittest.TestCase):
             d.derive(result['out'], self.root / 'again.db', ENGINE, PROFILE, 'left', TZ, ['2026-10-25'], self.cache)
         with self.assertRaisesRegex(ValueError, 'no cached readings'):
             d.derive(self.source, self.root / 'other.db', ENGINE, OTHER, 'left', TZ, ['2026-10-25'], self.cache)
+
+    def test_a_night_failing_stored_parity_is_never_derived(self):
+        with self.assertRaisesRegex(ValueError, 'parity gate'):
+            self.derive(parity='fail')
+        with self.assertRaisesRegex(ValueError, 'No night'):
+            d.derive(self.source, self.root / 'all.db', ENGINE, PROFILE, 'left', TZ, None, self.cache)
 
     def test_cache_is_write_once_and_records_skipped_nights(self):
         d.ingest(replay(self.root / 'a', self.readings(), skipped=['2026-10-24']), self.cache)

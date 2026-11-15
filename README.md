@@ -503,7 +503,7 @@ readings into a database the stage scripts already read.
 ```sh
 # In a core checkout: replay archived nights with one profile (defaults, or a profile JSON)
 pnpm biometrics:local-fit replay --archive <training>/data/archive/<podId> --nights all --side left \
-  --timezone America/Los_Angeles --config defaults <training>/data/replays/defaults
+  --timezone America/Los_Angeles --config defaults --compare-stored <training>/data/replays/defaults
 # Here: cache the readings, then derive a snapshot from them
 uv run --locked python scripts/derive_snapshot.py derive data/archive/<podId>/biometrics.db \
   --replay data/replays/defaults --out data/derived/defaults/biometrics.db
@@ -517,7 +517,9 @@ night's source database SHA-256, engine (biometrics manifest hash), profile (res
 hash), readings SHA-256 and `replay.json` SHA-256. Readings are cached once per
 (night, engine, profile) in `data/cache/vitals/<night>-<engine12>-<profile12>.json`; `derive
 --engine E --profile P --side left --timezone TZ` rebuilds from the cache alone, and a night
-whose sleep records changed since its replay is refused.
+whose sleep records changed since its replay is refused. With `--compare-stored`, core
+checks each replay against the stored rows of nights that ran one unchanged profile; a night
+that fails that parity gate is never derived (plan C5).
 
 `scripts/modelset.py` writes `RUN/model/set.json` (`modelset-v1`) next to an exported model:
 the stage model pinned by core's own hash (`modelset.py hash candidate.json`; the canonical JSON

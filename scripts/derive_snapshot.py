@@ -7,7 +7,8 @@
 Readings come from core: `pnpm biometrics:local-fit replay --archive DEST/POD_ID ... OUT`
 writes OUT/replay.json and OUT/readings/<night>-<profile12>.json (`--save-readings` format).
 The cache is data/cache/vitals/<night>-<engine12>-<profile12>.json, the readings file
-verbatim, with a `.source.json` beside it. Every other table is copied unchanged, so
+verbatim, with a `.source.json` beside it. A night whose replay failed core's stored-row
+parity gate (`--compare-stored`) is never derived: its replay is not used for training. Every other table is copied unchanged, so
 export-runtime-features.ts and the stage scripts run on the derived snapshot as on any
 other. A `derived_snapshot` table records, per night, the source database SHA-256, engine,
 profile, readings SHA-256 and replay.json SHA-256. Local files only; never contacts a pod.
@@ -67,8 +68,8 @@ def read_replay(directory):
         raise ValueError(f'{path}: expected biometrics-local-fit-replay-v1')
     return dict(engine=doc['engine']['manifestHash'], profile=doc['config']['configHash'], overrides=doc['config'].get('overrides'),
                 side=doc['side'], timezone=doc['timezone'], sha256=sha256(path), archive=doc.get('archive'),
-                nights=[dict(night=n['night'], startMs=n['scoreStartMs'], endMs=n['scoreEndMs'], readings=Path(directory) / n['readingsFile'])
-                        for n in doc['nights']],
+                nights=[dict(night=n['night'], startMs=n['scoreStartMs'], endMs=n['scoreEndMs'], readings=Path(directory) / n['readingsFile'],
+                             parity=(n.get('parity') or {}).get('gate')) for n in doc['nights']],
                 skipped=doc.get('skipped', []))
 
 
@@ -112,7 +113,7 @@ def ingest(directory, cache=None):
             shutil.copyfile(night['readings'], target)
         record = dict(night=night['night'], engine=replay['engine'], profile=replay['profile'], side=replay['side'],
                       timezone=replay['timezone'], startMs=night['startMs'], endMs=night['endMs'], readingsSha256=digest,
-                      replaySha256=replay['sha256'], overrides=replay['overrides'])
+                      replaySha256=replay['sha256'], overrides=replay['overrides'], parity=night['parity'])
         base.with_name(base.name + '.source.json').write_text(json.dumps(record, indent=2) + '\n')
         out.append(record)
     for row in replay['skipped']:
@@ -177,6 +178,11 @@ def derive(source, out, engine, profile, side, timezone, nights=None, cache=None
         if night not in windows:
             raise ValueError(f'{night}: no {side} sleep record in {source}')
         path, record = hit
+        if record.get('parity') == 'fail':
+            if nights is not None:
+                raise ValueError(f'{night}: the replay failed the stored-row parity gate, so it is not used for training')
+            live.append(night)
+            continue
         start, end = windows[night]
         if (record['startMs'], record['endMs']) != (start * 1000, end * 1000) or record['side'] != side:
             raise ValueError(f'{night}: replay window or side differs from this database; sleep records changed since the replay')
