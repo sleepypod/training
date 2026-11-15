@@ -27,6 +27,7 @@ from sklearn.metrics import confusion_matrix, f1_score
 from sklearn.model_selection import GroupKFold
 
 import piezo_bandwidth as pb
+import pod_http
 import raw_piezo as rp
 import watch_motion as wm
 import capture_common as cc
@@ -301,7 +302,7 @@ def fetch_movement(pod, side, start, end):
                                     'startDate': datetime.fromtimestamp(start - 120, timezone.utc).isoformat(),
                                     'endDate': datetime.fromtimestamp(end + 120, timezone.utc).isoformat()})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(f'{base_url(pod)}/api/biometrics/movement?{query}', timeout=30) as response:
+    with pod_http.open_url(opener, f'{base_url(pod)}/api/biometrics/movement?{query}', 30) as response:
         rows = json.loads(response.read())
     return sorted((datetime.fromisoformat(r['timestamp'].replace('Z', '+00:00')).timestamp(), r['totalMovement']) for r in rows)
 

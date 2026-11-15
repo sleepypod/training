@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import butter, sosfiltfilt, welch
 
+import pod_http
 import raw_piezo
 from fetch_pod import base_url
 from run_history import register_output
@@ -72,7 +73,7 @@ def pod_clock_offset_ms(pod):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     before = now_ms()
     try:
-        with opener.open(base_url(pod) + '/api/settings', timeout=10) as response:
+        with pod_http.open_url(opener, base_url(pod) + '/api/settings', 10) as response:
             header = response.headers.get('Date')
     except urllib.error.HTTPError as error:
         header = error.headers.get('Date')
@@ -100,7 +101,7 @@ def fetch_export(pod, start_s, end_s, out):
     out.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     try:
-        with opener.open(url, timeout=600) as response, open(out, 'wb') as f:
+        with pod_http.open_url(opener, url, 600) as response, open(out, 'wb') as f:
             declared = response.headers.get('Content-Length')
             while chunk := response.read(1 << 20):
                 f.write(chunk)
