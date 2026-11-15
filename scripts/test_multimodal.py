@@ -1,8 +1,13 @@
 """Behavioral checks for vitals reference, the pod movement model and the multi-source stage model."""
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
+import sqlite3
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -86,6 +91,44 @@ class MovementModelTests(unittest.TestCase):
         fitted = models.get(frozenset({'a', 'b'}))
         self.assertEqual(fitted['model'].n_features_in_, 21)
         self.assertIs(models.get(frozenset({'b', 'a'})), fitted)
+
+    def test_epochs_writes_cross_fitted_rows_for_integer_session_ids(self):
+        class InProcess:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                pass
+
+            def map(self, fn, jobs):
+                return map(fn, jobs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / 'biometrics.db'
+            with sqlite3.connect(db) as conn:
+                conn.execute('create table movement (side text, timestamp integer, total_movement real)')
+            features = root / 'features.json'
+            features.write_text(json.dumps({'side': 'left', 'sources': {'snapshot': hashlib.sha256(db.read_bytes()).hexdigest()},
+                                            'nights': [{'id': 7, 'group': 'b', 'start': 0, 'end': 600, 'rows': [{'start': 0}, {'start': 300}]}]}))
+            rng = np.random.default_rng(1)
+            teaching = {'x': rng.normal(size=(90, 21)), 'labels': np.array(['still', 'light'] * 45),
+                        'nights': np.array(['a'] * 30 + ['b'] * 30 + ['c'] * 30),
+                        't': np.concatenate([np.arange(30.0) + 5000, np.arange(30.0) + 100, np.arange(30.0) + 9000])}
+            model = root / 'model.joblib'
+            mm.joblib.dump({'final': mm.fit_matrix(teaching['x'], teaching['labels']), 'heldOut': {}, 'teaching': teaching}, model)
+            windows = [(0, rng.normal(size=(3, 21)), 4), (300, np.zeros((0, 21)), 4)]
+            out = root / 'epochs.json'
+            with patch.object(mm, 'ProcessPoolExecutor', InProcess), \
+                 patch.object(mm, 'one_session', lambda job: (job[1]['id'], windows, 0, 'sha')):
+                mm.main(['epochs', str(features), '--snapshot', str(db), '--model', str(model), '--export', '7=x.tar.gz', '--out', str(out)])
+            session = json.loads(out.read_text())['sessions']['7']
+            self.assertEqual(session['excludedNights'], ['b'])
+            self.assertEqual(set(session['excluding']), {'a', 'c'})
+            self.assertIsNone(session['rows'][1]['mmActive'])
 
     def test_cross_fitting_refuses_a_fold_without_still_windows(self):
         bundle = {'final': None, 'heldOut': {}, 'teaching': {'x': np.zeros((4, 21)), 'labels': np.array(['still', 'still', 'light', 'light']),

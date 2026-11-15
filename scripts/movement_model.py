@@ -252,7 +252,8 @@ def cmd_epochs(args):
             jobs.append((export, night, data['side'], movement))
     sessions = {}
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        for session, windows, decode_errors, export_sha in pool.map(one_session, jobs):
+        for night_id, windows, decode_errors, export_sha in pool.map(one_session, jobs):
+            session = str(night_id)
             night = by_id[session]
             own = own_exclusions(night, bundle['teaching'])
             rows = epoch_features(models.get(own), windows)
