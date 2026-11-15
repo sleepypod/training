@@ -314,15 +314,21 @@ pod movement score, the `movement.py` classifier and the new model on 2 s window
 5-minute epochs. The model adds the pod score to the raw piezo and capacitance
 features, and its moving threshold is chosen on out-of-bag training predictions.
 `epochs` needs one raw export per sleep session (`GET /api/export/archive`, read-only;
-the pod prunes old archives). A night whose Watch motion trained the model gets the
-model fitted without that night. Raw-piezo features need a core port before a pod can
-compute them.
+the pod prunes old archives). Its features are cross-fitted: each session is scored by a
+model fitted without every Watch-motion night whose windows fall inside it, and once more
+per other Watch-motion night T by a model also fitted without T. `model.joblib` keeps the
+teaching windows so these models can be refitted; one trained by an earlier version is refused.
+Moving windows are those strictly above the strict threshold, so tied probabilities at the
+cutoff never count as moving. Raw-piezo features need a core port before a pod can compute them.
 
 `fusion.py` evaluates the frozen ablation forest on the nights that have raw exports:
 `base` (podNative), `all` (the podContext columns), `all` plus HR quality, plus
 movement-model features, both (`fused`), and a wake-first `hierarchical_fused`. It
 scores every arm leave-one-night-out and chronologically, against the stages the pod
-recorded live. `--pod-model-trained-through` reports nights after the pod model's
+recorded live. When night T is held out, every night's movement features come from models
+that never saw T's Watch motion. Chronological scores use only labelled epochs that also have
+a live pod stage, for every arm, so pod and model share one population (`podCoverage` per
+night). The input must use the `podNative` contract, since the arms add the podContext columns. `--pod-model-trained-through` reports nights after the pod model's
 training separately, because earlier nights are in-sample for it. Nothing is exported.
 
 ## Save and reuse a model

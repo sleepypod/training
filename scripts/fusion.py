@@ -9,9 +9,11 @@ nights (those with a raw export for the movement model):
 - fused: all plus both; hierarchical_fused separates wake first.
 
 Every input is computed from pod data. Watch stages are the labels; Watch motion
-trained the movement model only, cross-fitted so a held-out night never gets a
-movement model fitted on its own Watch motion. Evaluated leave-one-night-out and
-chronologically (walk-forward and frozen) against the stages the pod recorded live.
+trained the movement model only, cross-fitted: when night T is held out, every
+night's movement features (training and test) come from movement models fitted
+without T's Watch motion. Evaluated leave-one-night-out and chronologically
+(walk-forward and frozen) against the stages the pod recorded live; pod and model
+are compared on the same labelled epochs (those with a live pod stage).
 Not prospective; never exports, uploads or activates.
 """
 import argparse
@@ -72,11 +74,49 @@ def dataset_for(data, key):
     return data['fused' if key == HIERARCHICAL else key]
 
 
-def leave_one_out(data, groups, ruleset, rng):
+def require_pod_native(data):
+    """Arms add the podContext groups themselves, so `base` must be exactly podNative."""
+    added = {name for group in GROUPS.values() for name in group}
+    if data.get('contract', 'podNative') != 'podNative' or added & set(data['features']):
+        raise ValueError('fusion.py adds the podContext columns itself; export features with the podNative contract')
+
+
+def movement_rows(session, held_out):
+    """Per-epoch movement features for `session` when night group `held_out` is the test night."""
+    if session['group'] == held_out:
+        return session['rows']
+    return session['excluding'].get(held_out, session['rows'])
+
+
+def arm_data(nights, features, base_extras, movement, held_out):
+    """Every arm's nights, with movement-model features that never saw `held_out`'s Watch motion."""
+    extras = []
+    for night, base in zip(nights, base_extras):
+        epochs = {r['start']: r for r in movement_rows(movement['sessions'][str(night['id'])], held_out)}
+        extras.append([{**e, **epochs[r['start']]} for r, e in zip(night['rows'], base)])
+    return datasets(nights, features, extras)
+
+
+def predict_shared(clf, held, ruleset):
+    """Full-night postprocessing, scored only on labelled epochs that also have a live pod stage."""
+    y, p, labelled = [], [], 0
+    for night in held:
+        processed = rm.postprocess(clf.predict(np.asarray([r['x'] for r in night['rows']])), ruleset)
+        for row, pred in zip(night['rows'], processed):
+            if row['y'] is not None:
+                labelled += 1
+                if row.get('pod') is not None:
+                    y.append(row['y'])
+                    p.append(pred)
+    return y, p, labelled
+
+
+def leave_one_out(data_for, groups, ruleset, rng):
     pooled = {k: ([], []) for k in KEYS}
     per_night = []
     for group in groups:
         row = dict(group=group)
+        data = data_for(group)
         for key in KEYS:
             train = [n for n in dataset_for(data, key) if n['group'] != group]
             held = [n for n in dataset_for(data, key) if n['group'] == group]
@@ -91,16 +131,17 @@ def leave_one_out(data, groups, ruleset, rng):
                              for a, b in COMPARISONS if POD not in (a, b)})
 
 
-def chronological(kind, data, nights, ruleset, rng, unseen_after):
+def chronological(kind, data_for, nights, ruleset, rng, unseen_after):
     pooled = {k: ([], []) for k in KEYS + (POD,)}
     per_night = []
     for train_groups, test in sb.schedule({n['group'] for n in nights}, kind):
         row = dict(group=test, trainedOn=len(train_groups))
+        data = data_for(test)
         for key in KEYS:
             train = [n for n in dataset_for(data, key) if n['group'] in train_groups]
             held = [n for n in dataset_for(data, key) if n['group'] == test]
             assert max(n['group'] for n in train) < test
-            y, p = rm.predict(fitted(key, train), held, ruleset)
+            y, p, labelled = predict_shared(fitted(key, train), held, ruleset)
             pooled[key][0].extend(y)
             pooled[key][1].extend(p)
             row[key] = sb.night_scores(y, p)
@@ -108,6 +149,7 @@ def chronological(kind, data, nights, ruleset, rng, unseen_after):
         pooled[POD][0].extend(y)
         pooled[POD][1].extend(p)
         row[POD] = sb.night_scores(y, p)
+        row['podCoverage'] = len(y) / labelled if labelled else None
         per_night.append(row)
         print(f'{kind}: {test} scored (trained on {len(train_groups)} nights)', flush=True)
     result = dict(nights=per_night, pooled=summary(pooled),
@@ -141,23 +183,27 @@ def main():
     if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
         raise ValueError('Snapshot does not match the one these features were exported from')
     movement = json.loads(args.movement_epochs.read_text())
+    if movement.get('version') != 'movement-epochs-v2':
+        raise ValueError('Movement epochs are not cross-fitted per held-out night; rerun movement_model.py epochs')
     if movement['inputSha256'] != hashlib.sha256(args.features.read_bytes()).hexdigest():
         raise ValueError('Movement epochs were computed for different features')
     args.out.mkdir(parents=True, exist_ok=True)
     if any(args.out.iterdir()):
         raise ValueError('Use an empty output directory; do not overwrite an evaluation or partial run')
     features, ruleset, side = data['features'], data['ruleset'], data['side']
+    require_pod_native(data)
     nights = [n for n in data['nights'] if str(n['id']) in movement['sessions']]
     groups = sorted({n['group'] for n in nights})
     excluded = sorted({n['group'] for n in data['nights']} - set(groups))
-    extras = []
+    base_extras = []
     with sqlite3.connect(f'file:{args.snapshot.resolve()}?mode=ro', uri=True) as db:
         for night in nights:
             vitals = vr.night_vitals(db, side, night['start'], night['end'])
-            epochs = {r['start']: r for r in movement['sessions'][str(night['id'])]['rows']}
-            extras.append([{**e, **vr.quality_features(r['start'], vitals, ruleset['outliers']), **epochs[r['start']]}
-                           for r, e in zip(night['rows'], fa.augment(night, features, db, side))])
-    data_by_arm = datasets(nights, features, extras)
+            base_extras.append([{**e, **vr.quality_features(r['start'], vitals, ruleset['outliers'])}
+                                for r, e in zip(night['rows'], fa.augment(night, features, db, side))])
+
+    def data_for(held_out):
+        return arm_data(nights, features, base_extras, movement, held_out)
     rng = np.random.default_rng(42)
     protocol = dict(scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         ablationSha256=hashlib.sha256(Path(fa.__file__).read_bytes()).hexdigest(),
@@ -166,12 +212,14 @@ def main():
         nightGroups=groups, excludedWithoutRawExport=excluded, minTrainGroups=sb.MIN_TRAIN_GROUPS,
         baseline=f'{POD}: stages the pod recorded live (its selected model may have trained on some nights)',
         podModelTrainedThrough=args.pod_model_trained_through, watchSignalsAsFeatures=False,
+        crossFitting='movement features for every night come from models fitted without the held-out night\'s Watch motion',
+        podComparisonEpochs='chronological scores use labelled epochs with a live pod stage, for every arm; podCoverage per night',
         postprocessing='production smoothing and transition rules', prospective=False,
         inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
     report = dict(protocol=protocol, groups=len(groups), sessions=len(nights),
-        leaveOneOut=leave_one_out(data_by_arm, groups, ruleset, rng),
-        schedules={kind: chronological(kind, data_by_arm, nights, ruleset, rng, args.pod_model_trained_through) for kind in ('walk-forward', 'frozen')},
+        leaveOneOut=leave_one_out(data_for, groups, ruleset, rng),
+        schedules={kind: chronological(kind, data_for, nights, ruleset, rng, args.pod_model_trained_through) for kind in ('walk-forward', 'frozen')},
         limitations=['One participant; nights were inspected before, so this is retrospective, not prospective.',
             'Watch stages are the reference, not polysomnography; Watch wake labels are sparse.',
             'The movement model is fitted on Watch-motion nights that can postdate a chronological test night; it never saw that night.',

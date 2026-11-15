@@ -4,9 +4,10 @@
           classifier and this model, on 2 s windows and on 5-minute epochs, then fit
           one model per held-out night plus one on every night.
   epochs  Apply the model to raw exports of sleep sessions and write per-epoch
-          movement features for the stage model. A night whose Watch motion trained
-          the model gets that night's held-out model, so stage evaluation never sees
-          a movement model fitted on its own Watch motion.
+          movement features for the stage model, cross-fitted: a session gets a model
+          fitted without every Watch-motion night whose windows fall inside it, plus
+          one variant per other Watch-motion night T fitted without T as well, so a
+          stage model tested on T never trains on features T's Watch motion taught.
 
 Inputs are pod-only, so a pod could compute them; Watch motion is the label only.
 Watch stages are derived partly from Watch acceleration, so these features carry
@@ -35,8 +36,8 @@ CLASSES = ('still', 'light', 'vigorous')
 EPOCH = 300
 INFERENCE_HOP_S = 2.0
 EPOCH_FEATURES = ('mmActive', 'mmMoving', 'mmPeak')
-# Epoch features count windows above a strict threshold: at most this share of still
-# training windows (out-of-bag) is flagged. Chosen on Watch-motion epoch agreement,
+# Epoch features count windows strictly above a threshold: at most this share of still
+# training windows (out-of-bag) is flagged, also when many probabilities tie at the cutoff. Chosen on Watch-motion epoch agreement,
 # never on stage results: a balanced threshold leaves a false-alarm floor in still epochs.
 STRICT_FALSE_ALARM = 0.01
 # Frozen before evaluation. Shallower than movement.py's forest so probabilities are smoother and the fitted file stays small.
@@ -64,7 +65,10 @@ def balanced_threshold(probability, moving):
 
 
 def fit(rows):
-    x, labels = matrix(rows), np.asarray([r['label'] for r in rows])
+    return fit_matrix(matrix(rows), np.asarray([r['label'] for r in rows]))
+
+
+def fit_matrix(x, labels):
     clf = RandomForestClassifier(**MODEL).fit(x, labels)
     oob = 1 - clf.oob_decision_function_[:, list(clf.classes_).index('still')]
     finite = np.isfinite(oob)
@@ -92,6 +96,8 @@ def cmd_train(args):
     nights = sorted({r['night'] for r in rows})
     if len(nights) < 2:
         raise SystemExit('Need Watch-labeled windows from at least two nights')
+    if 'still' not in {r['label'] for r in rows}:
+        raise SystemExit('Need still-labelled Watch windows to calibrate the moving threshold')
     labels = np.asarray([r['label'] for r in rows])
     truth = labels != 'still'
     arms = {k: np.zeros(len(rows), bool) for k in ('podScore', 'classifierV1', 'model', 'modelStrict')}
@@ -101,6 +107,8 @@ def cmd_train(args):
         test = np.asarray([r['night'] == night for r in rows])
         train = [r for r, t in zip(rows, test) if not t]
         held = [r for r, t in zip(rows, test) if t]
+        if not any(r['label'] == 'still' for r in train):
+            raise SystemExit(f'Holding out {night} leaves no still-labelled windows to train on')
         scores = np.asarray([r['baseline'] for r in train], float)
         threshold = mv.best_threshold(scores, np.asarray([r['label'] != 'still' for r in train]))
         arms['podScore'][test] = np.asarray([r['baseline'] for r in held], float) >= threshold
@@ -109,11 +117,14 @@ def cmd_train(args):
         fitted = fit(train)
         probability[test] = moving_probability(fitted['model'], matrix(held))
         arms['model'][test] = probability[test] >= fitted['threshold']
-        arms['modelStrict'][test] = probability[test] >= fitted['strictThreshold']
+        arms['modelStrict'][test] = probability[test] > fitted['strictThreshold']
         folds[night] = fitted
         print(f'Held-out night {night}: {int(test.sum())} windows', flush=True)
     final = fit(rows)
-    joblib.dump(dict(final=final, heldOut=folds, classes=CLASSES, features=mv.FEATURE_NAMES + ['podScore'],
+    # The teaching windows travel with the model so `epochs` can refit without any set of nights.
+    teaching = dict(x=matrix(rows), labels=labels, nights=np.asarray([r['night'] for r in rows]),
+                    t=np.asarray([r['t'] for r in rows], float))
+    joblib.dump(dict(final=final, heldOut=folds, teaching=teaching, classes=CLASSES, features=mv.FEATURE_NAMES + ['podScore'],
                      windowSeconds=mv.WINDOW_S, epochFeatures=EPOCH_FEATURES), out / 'model.joblib', compress=3)
     per_night = {night: {arm: mv.binary_metrics(truth[m], flags[m], labels[m])['balancedAccuracy'] for arm, flags in arms.items()}
                  for night in nights for m in [np.asarray([r['night'] == night for r in rows])]}
@@ -176,20 +187,45 @@ def epoch_features(fitted, windows):
         proba = fitted['model'].predict_proba(x)
         classes = list(fitted['model'].classes_)
         moving = 1 - proba[:, classes.index('still')]
-        rows.append(dict(start=start, coverage=len(x) / expected, mmActive=float((moving >= fitted['strictThreshold']).mean()),
+        rows.append(dict(start=start, coverage=len(x) / expected, mmActive=float((moving > fitted['strictThreshold']).mean()),
                          mmMoving=float(moving.mean()), mmPeak=float(moving.max())))
     return rows
 
 
 def one_session(job):
-    export, night, side, movement, model_path = job
-    bundle = joblib.load(model_path)
-    held_out = night['group'] in bundle['heldOut']
-    fitted = bundle['heldOut'][night['group']] if held_out else bundle['final']
+    """Window features for one session; the parent process applies every model it needs."""
+    export, night, side, movement = job
     recs, errors, _ = pb.load_export(export)
-    rows = epoch_features(fitted, session_windows(recs, side, night['rows'], movement))
-    return night['id'], dict(group=night['group'], model='held-out ' + night['group'] if held_out else 'final', decodeErrors=len(errors),
-                             exportSha256=hashlib.sha256(Path(export).read_bytes()).hexdigest(), rows=rows)
+    return night['id'], session_windows(recs, side, night['rows'], movement), len(errors), hashlib.sha256(Path(export).read_bytes()).hexdigest()
+
+
+def own_exclusions(night, teaching):
+    """Watch-motion nights a session must not be scored with: its own group and any whose windows fall inside it."""
+    inside = (teaching['t'] >= night['start']) & (teaching['t'] < night['end'])
+    known = set(teaching['nights'].tolist())
+    return frozenset(set(teaching['nights'][inside].tolist()) | ({night['group']} & known))
+
+
+class CrossFitted:
+    """Movement models keyed by the Watch-motion nights they exclude; fitted once each, on demand."""
+
+    def __init__(self, bundle):
+        self.teaching = bundle['teaching']
+        self.models = {frozenset(): bundle['final'], **{frozenset({n}): f for n, f in bundle['heldOut'].items()}}
+
+    def get(self, excluded):
+        if excluded not in self.models:
+            keep = ~np.isin(self.teaching['nights'], sorted(excluded))
+            labels = self.teaching['labels'][keep]
+            if 'still' not in set(labels.tolist()):
+                raise SystemExit(f'Excluding {", ".join(sorted(excluded))} leaves no still-labelled windows')
+            print(f'Fitting movement model without {", ".join(sorted(excluded))}', flush=True)
+            self.models[excluded] = fit_matrix(self.teaching['x'][keep], labels)
+        return self.models[excluded]
+
+
+def label(excluded):
+    return 'without ' + ', '.join(sorted(excluded)) if excluded else 'final'
 
 
 def cmd_epochs(args):
@@ -200,6 +236,11 @@ def cmd_epochs(args):
     data = json.loads(Path(args.features).read_text())
     if data['sources']['snapshot'] != hashlib.sha256(Path(args.snapshot).read_bytes()).hexdigest():
         raise ValueError('Snapshot does not match the one these features were exported from')
+    bundle = joblib.load(args.model)
+    if 'teaching' not in bundle:
+        raise SystemExit(f'{args.model} predates cross-fitted epochs; retrain it with this version of movement_model.py train')
+    models = CrossFitted(bundle)
+    teaching_nights = sorted(set(bundle['teaching']['nights'].tolist()))
     by_id = {str(n['id']): n for n in data['nights']}
     jobs = []
     with sqlite3.connect(f'file:{Path(args.snapshot).resolve()}?mode=ro', uri=True) as db:
@@ -208,15 +249,22 @@ def cmd_epochs(args):
             night = by_id[session]
             movement = db.execute('select timestamp, total_movement from movement where side=? and timestamp>=? and timestamp<? order by timestamp',
                                   (data['side'], night['start'] - 120, night['end'] + 120)).fetchall()
-            jobs.append((export, night, data['side'], movement, args.model))
+            jobs.append((export, night, data['side'], movement))
     sessions = {}
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        for session, result in pool.map(one_session, jobs):
-            sessions[session] = result
-            covered = [r['coverage'] for r in result['rows']]
-            print(f"Session {session} ({result['group']}, {result['model']}): {len(covered)} epochs, mean raw coverage {np.mean(covered):.0%}", flush=True)
+        for session, windows, decode_errors, export_sha in pool.map(one_session, jobs):
+            night = by_id[session]
+            own = own_exclusions(night, bundle['teaching'])
+            rows = epoch_features(models.get(own), windows)
+            excluding = {t: epoch_features(models.get(own | {t}), windows) for t in teaching_nights if t not in own}
+            sessions[session] = dict(group=night['group'], model=label(own), excludedNights=sorted(own), decodeErrors=decode_errors,
+                                     exportSha256=export_sha, rows=rows, excluding=excluding)
+            covered = [r['coverage'] for r in rows]
+            print(f"Session {session} ({night['group']}, {label(own)}): {len(covered)} epochs, mean raw coverage {np.mean(covered):.0%}", flush=True)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(dict(version='movement-epochs-v1', features=list(EPOCH_FEATURES), epochSeconds=EPOCH,
+    out.write_text(json.dumps(dict(version='movement-epochs-v2', features=list(EPOCH_FEATURES), epochSeconds=EPOCH,
+                                   teachingNights=teaching_nights,
+                                   crossFitting='rows: model without the session\'s own Watch-motion nights; excluding[T]: also without night T',
                                    modelSha256=hashlib.sha256(Path(args.model).read_bytes()).hexdigest(),
                                    inputSha256=hashlib.sha256(Path(args.features).read_bytes()).hexdigest(), sessions=sessions)))
     print(f'Wrote {out}')

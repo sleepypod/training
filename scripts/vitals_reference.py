@@ -53,13 +53,32 @@ def watch_mean(samples, start, end):
     return float(np.mean(values)) if values else None
 
 
+def finite(value):
+    """None for an undefined coefficient (constant input), so reports stay strict JSON."""
+    return float(value) if np.isfinite(value) else None
+
+
+def rank_correlation(a, b):
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    return None if a.std() == 0 or b.std() == 0 else finite(spearmanr(a, b).statistic)
+
+
 def agreement(pairs):
     if len(pairs) < 3:
         return None
     pod, watch = np.asarray(pairs, float).T
     error = pod - watch
+    constant = pod.std() == 0 or watch.std() == 0
     return dict(epochs=len(pairs), bias=float(error.mean()), mae=float(np.abs(error).mean()),
-                pearson=float(np.corrcoef(pod, watch)[0, 1]), spearman=float(spearmanr(pod, watch).statistic))
+                pearson=None if constant else finite(np.corrcoef(pod, watch)[0, 1]), spearman=rank_correlation(pod, watch))
+
+
+def rank_agreement(pairs):
+    """Pair count and Spearman only, for signals that are different statistics on each device."""
+    if len(pairs) < 3:
+        return None
+    pod, watch = np.asarray(pairs, float).T
+    return dict(epochs=len(pairs), spearman=rank_correlation(pod, watch))
 
 
 def stage_means(rows, key):
@@ -74,6 +93,10 @@ def stage_means(rows, key):
             if r[key] is not None and r['y'] is not None:
                 out[pm.STAGES[r['y']]].append((r[key] - mean) / std)
     return {s: (float(np.mean(v)) if v else None) for s, v in out.items()}
+
+
+def fmt(value, spec='.2f'):
+    return 'n/a' if value is None else format(value, spec)
 
 
 def main():
@@ -114,7 +137,7 @@ def main():
     for name, keep in (('full', lambda r: r['hrCoverage'] >= 1), ('partial', lambda r: 0 < r['hrCoverage'] < 1)):
         by_coverage[name] = agreement([(r['podHr'], r['watchHr']) for r in hr_pairs if keep(r)])
     error = np.abs([r['podHr'] - r['watchHr'] for r in hr_pairs])
-    predictors = {q: float(spearmanr([r[q] for r in hr_pairs], error).statistic) for q in QUALITY} if len(hr_pairs) > 2 else {}
+    predictors = {q: rank_correlation([r[q] for r in hr_pairs], error) for q in QUALITY} if len(hr_pairs) > 2 else {}
     report = dict(
         protocol=dict(scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), epochSeconds=EPOCH,
                       watchSampleRule='Watch samples whose midpoint falls in the epoch', podOutliers=outliers,
@@ -127,18 +150,18 @@ def main():
                        absErrorSpearmanWithQuality=predictors),
         breathingRate=agreement([(r['podBr'], r['watchBr']) for r in flat if r['podBr'] is not None and r['watchBr'] is not None]),
         hrv=dict(note='Pod HRV and Watch SDNN are different statistics; only rank agreement is meaningful.',
-                 **(agreement([(r['podHrv'], r['watchHrv']) for r in flat if r['podHrv'] is not None and r['watchHrv'] is not None]) or {})),
+                 **(rank_agreement([(r['podHrv'], r['watchHrv']) for r in flat if r['podHrv'] is not None and r['watchHrv'] is not None]) or {})),
         stageZ={k: stage_means(nights, k) for k in ('podHr', 'watchHr', 'podBr', 'watchBr')},
         limitations=['One participant; Watch vitals are device estimates, not ECG or capnography.',
                      'Watch heart rate is sparse during sleep; epochs without a Watch sample are excluded from agreement.',
                      'Watch vitals are reference signals only, never stage-model features.'])
-    (args.out / 'report.json').write_text(json.dumps(report, indent=2))
+    (args.out / 'report.json').write_text(json.dumps(report, indent=2, allow_nan=False))
     hr = report['heartRate']
     print(f"{report['nights']} nights · {report['epochs']} epochs · coverage " + ', '.join(f'{k} {v:.0%}' for k, v in report['coverage'].items()))
     for name, a in [('HR all', hr['all']), *((f'HR pod coverage {k}', v) for k, v in by_coverage.items()), ('BR', report['breathingRate'])]:
         if a:
-            print(f"{name:24} n={a['epochs']} bias {a['bias']:+.1f} MAE {a['mae']:.1f} r {a['pearson']:.2f} ρ {a['spearman']:.2f}")
-    print('|HR error| Spearman with ' + ', '.join(f'{k} {v:+.2f}' for k, v in predictors.items()))
+            print(f"{name:24} n={a['epochs']} bias {a['bias']:+.1f} MAE {a['mae']:.1f} r {fmt(a['pearson'])} ρ {fmt(a['spearman'])}")
+    print('|HR error| Spearman with ' + ', '.join(f'{k} {fmt(v, "+.2f")}' for k, v in predictors.items()))
     for key, means in report['stageZ'].items():
         print(f'{key:8} z by Watch stage: ' + ' '.join(f'{s} {v:+.2f}' for s, v in means.items() if v is not None))
 
