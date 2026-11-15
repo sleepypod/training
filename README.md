@@ -331,6 +331,53 @@ a live pod stage, for every arm, so pod and model share one population (`podCove
 night). The input must use the `podNative` contract, since the arms add the podContext columns. `--pod-model-trained-through` reports nights after the pod model's
 training separately, because earlier nights are in-sample for it. Nothing is exported.
 
+## Off-pod archive
+
+The pod prunes about one night of raw piezo a day. Core's archiver
+(`pnpm biometrics:archive pull`, in a core checkout) keeps everything it exports in
+`data/archive/<podId>/`: a merged `biometrics.db`, content-addressed `raw/*.RAW.gz` and
+one `pulls/*.json` record per window. The pull is read-only on the pod. Install a daily
+12:30 pull as a launchd agent; set `coreCheckout` in `data/workspace-settings.json` (else
+`../sleepypod-core` next to this checkout is used) and check the plist first:
+
+```sh
+scripts/install-archive-agent.sh --dry-run
+scripts/install-archive-agent.sh              # logs to data/archive/pull.log
+scripts/install-archive-agent.sh --uninstall
+```
+
+Then index the archive by night. The index reads local files only:
+
+```sh
+uv run --locked python scripts/archive_index.py --timezone America/Los_Angeles \
+  --local-exports-dir data/raw --storage data/storage.json
+uv run --locked python scripts/lineage.py data/archive/<podId> --timezone America/Los_Angeles
+```
+
+`archive_index.py` writes `data/archive/<podId>/index.json`, one row per sleep record per
+side: in-bed hours, raw coverage of the in-bed seconds and its source (`archive`, or
+`local-export:<path>` for `/api/export/archive` tarballs saved before the archive), Watch
+teachers per type, vitals lineage, whether the night is in the locked holdout, and whether
+its raw is at risk (only on the pod, within 3 days of the pod's oldest raw). At-risk nights
+print first. `--storage` is a saved `GET /api/system/storage`; without it the oldest raw is
+estimated from the first pull. Decoded coverage is cached by RAW SHA-256 in
+`data/cache/raw-coverage/`.
+
+`lineage.py` reports which vitals engine and profile produced each night's stored vitals
+(`mixed` when a night spans a change), the core build from the first pull after the night,
+and the stage-model selection from an optional saved `GET /api/sleep-stages/models?side=`
+(`--stage-models left=FILE`); the pod restages on read.
+
+Nights whose Watch data never reached the pod can take a sidecar from an Apple Health
+export. The index prefers the pod's rows and marks sidecar nights in lower case:
+
+```sh
+uv run --locked python scripts/parse-watch-export.py data/export.zip data/watch.json
+uv run --locked python scripts/parse-watch-export.py data/export.zip data/watch-vitals.json --vitals
+uv run --locked python scripts/watch_sidecar.py import --archive data/archive/<podId> --side left \
+  --timezone America/Los_Angeles --stages data/watch.json --vitals data/watch-vitals.json
+```
+
 ## Save and reuse a model
 
 Every successful run automatically saves `model/candidate.json` (portable pod
