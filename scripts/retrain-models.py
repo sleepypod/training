@@ -161,7 +161,7 @@ def export(clf, name, dataset, output, score):
     doc = dict(version=f'research-{name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}',
         classes=list(pm.STAGES), featureContract=dataset['features'], epochSeconds=300,
         trainedAt=datetime.now(timezone.utc).isoformat(), source='runtime-feature nested night retraining; not prospectively validated',
-        metrics={'nestedSelection': score},
+        metrics={'nestedSelection': score, 'trainedThrough': max(n['group'] for n in dataset['nights'])},
         testVectors=[dict(inputs=dict(zip(dataset['features'], map(float, xs[i]))), expected=int(expected[i])) for i in indices], **model)
     (output / 'candidate.json').write_text(json.dumps(doc, separators=(',', ':')))
     joblib.dump(clf, output / 'candidate.joblib')

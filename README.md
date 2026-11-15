@@ -309,6 +309,38 @@ uv run --locked python scripts/retrain-models.py data/runs/RUN/features.json \
   --out data/runs/RUN-final --holdout-final
 ```
 
+## Weekly trial of the deployed model
+
+`stage-backtest.py --trial` scores two frozen pod models against the Watch on the same
+new nights (night groups after 2026-11-13, plan E1): the stages the pod shows
+(`pod_live`, read with `GET /api/biometrics/sleep-stages`; the pod restages on read with
+its selected model, library id 3) and library id 2 staged by the read-only
+`POST /api/sleep-stages/model/preview`. The library API lists models without their
+JSON, so id 2 comes from a local copy, checked against the library's version. Nights
+come from an archive snapshot (`--snapshot`, Watch stages from `reference_stages`)
+or a run's `features.json` (`--run`), aligned to the exporter's Watch 5-minute epochs;
+both models are scored on the same labelled epochs.
+
+```sh
+uv run --locked python scripts/stage-backtest.py --trial --pod 192.168.1.88 --side left \
+  --snapshot data/archive/<podId>/biometrics.db \
+  --baseline-model data/runs/<id-2 run>/model/candidate.json \
+  --live-model data/runs/<id-3 run>/model/candidate.json
+```
+
+Each run appends one line per (night, model) to `data/runs/trial-id3/weekly.jsonl`
+with the model id, version, SHA-256 (keys sorted, numbers as doubles, so a pod copy
+and a local file agree), training cutoff, `outOfSample`, `locked`, metrics and
+`scoredAt`. Re-scoring a night replaces its lines. A night counts as out of sample
+only after a model's training cutoff, taken from `--trained-through ID=YYYY-MM-DD`,
+the model's `metrics.trainedThrough`, or the last night group of the run the local
+copy came from. Locked holdout nights are included, since both models are frozen,
+and each run logs them for both models in `data/holdout-access.jsonl` (`trial`)
+before reading. The summary gives per-night macro F1 and κ differences id 3 − id 2,
+a night-level bootstrap 95% interval (10,000 resamples, seed 42) and a sign-test
+count, over every night in the file that is out of sample for both. Pod reads are
+GETs and the preview only.
+
 ## Multi-source training
 
 Watch signals teach the pod models; they are never stage-model inputs. Watch stages
