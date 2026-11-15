@@ -125,8 +125,8 @@ def training_nights(groups):
 
 
 def build(set_id, model, contract, inputs, nights, vitals=None, movement=None, archive=None, evaluation=None):
-    """A modelset-v1 manifest. `vitals` is {engine, profile}; `movement` is {version, sha256}."""
-    nodes = dict(stage=dict(version=model['version'], sha256=stage_sha256(model), contract=contract, binding='pinned'))
+    """A modelset-v1 manifest. `vitals` is {engine, profile}; `movement` is {version, sha256}; `contract` may be None."""
+    nodes = dict(stage=dict(version=model['version'], sha256=stage_sha256(model), **({'contract': contract} if contract else {}), binding='pinned'))
     if vitals:
         nodes['vitals'] = dict(engine=vitals['engine'], profile=vitals['profile'], binding='expected')
     if movement:

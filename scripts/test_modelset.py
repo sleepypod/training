@@ -116,6 +116,7 @@ class ModelSetTests(unittest.TestCase):
     def test_live_sets_may_leave_vitals_out_and_write_set_json(self):
         doc = self.manifest(inputs='live', vitals=None)
         self.assertNotIn('vitals', doc['nodes'])
+        self.assertNotIn('contract', m.build('x', model(), None, 'live', doc['training']['nights'])['nodes']['stage'])
         with tempfile.TemporaryDirectory() as d:
             path = m.write(d, doc, model())
             self.assertEqual(path, Path(d) / 'model/set.json')
