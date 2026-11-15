@@ -8,6 +8,8 @@
           fitted without every Watch-motion night whose windows fall inside it, plus
           one variant per other Watch-motion night T fitted without T as well, so a
           stage model tested on T never trains on features T's Watch motion taught.
+  export  Write the final model of an existing model.joblib as the portable forest
+          `train` writes to model/movement.json (movementRaw-v1, test vectors, SHA-256).
 
 Inputs are pod-only, so a pod could compute them; Watch motion is the label only.
 Watch stages are derived partly from Watch acceleration, so these features carry
@@ -29,6 +31,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import movement as mv
+import movement_portable as portable
 import piezo_bandwidth as pb
 import raw_piezo as rp
 
@@ -75,6 +78,20 @@ def fit_matrix(x, labels):
     moving = labels[finite] != 'still'
     return dict(model=clf, threshold=balanced_threshold(oob[finite], moving),
                 strictThreshold=float(np.quantile(oob[finite][~moving], 1 - STRICT_FALSE_ALARM)))
+
+
+def export_meta(nights, labels, source):
+    return dict(columns=mv.FEATURE_NAMES + ['podScore'], windowSeconds=mv.WINDOW_S, hopSeconds=INFERENCE_HOP_S, sampleRateHz=mv.FS,
+                epochSeconds=EPOCH, epochFeatures=EPOCH_FEATURES, hyperparameters={k: v for k, v in MODEL.items() if k != 'n_jobs'},
+                training=dict(nights=sorted(set(nights.tolist())), windows=int(len(labels)),
+                              classCounts={c: int((labels == c).sum()) for c in CLASSES}), source=source)
+
+
+def write_portable(fitted, x, labels, nights, source, out):
+    result = portable.export(fitted, x, labels, export_meta(nights, labels, source), out)
+    print(f"Portable forest: {result['path']} · {result['bytes'] / 1e6:.1f} MB · {result['nodes']:,} nodes · {result['testVectors']} test vectors · "
+          f"max |Δ| vs sklearn {max(result['maxAbsDifference'].values()):.1e} on {result['parityWindows']:,} windows", flush=True)
+    return result
 
 
 def epoch_agreement(rows, moving):
@@ -126,6 +143,8 @@ def cmd_train(args):
                     t=np.asarray([r['t'] for r in rows], float))
     joblib.dump(dict(final=final, heldOut=folds, teaching=teaching, classes=CLASSES, features=mv.FEATURE_NAMES + ['podScore'],
                      windowSeconds=mv.WINDOW_S, epochFeatures=EPOCH_FEATURES), out / 'model.joblib', compress=3)
+    exported = write_portable(final, teaching['x'], labels, teaching['nights'], 'movement_model.py train; leave-one-night-out report.json',
+                              out / 'model' / 'movement.json')
     per_night = {night: {arm: mv.binary_metrics(truth[m], flags[m], labels[m])['balancedAccuracy'] for arm, flags in arms.items()}
                  for night in nights for m in [np.asarray([r['night'] == night for r in rows])]}
     report = dict(version='movement-model-report-v1', validation='leave-one-night-out', nights=nights, windows=len(rows),
@@ -135,7 +154,7 @@ def cmd_train(args):
                               'modelProbability': epoch_agreement(rows, probability)},
                   perNightBalancedAccuracy=per_night, thresholds={n: {k: f[k] for k in ('threshold', 'strictThreshold')} for n, f in (folds | {'final': final}).items()},
                   strictFalseAlarm=STRICT_FALSE_ALARM,
-                  model=MODEL, classifierV1=V1, featureNames=mv.FEATURE_NAMES + ['podScore'],
+                  model=MODEL, classifierV1=V1, portable=exported, featureNames=mv.FEATURE_NAMES + ['podScore'],
                   scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   inputs={str(p): hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in args.windows},
                   limitations=['Labels are preregistered Watch-motion heuristics on the wrist, not whole-body ground truth.',
@@ -271,6 +290,23 @@ def cmd_epochs(args):
     print(f'Wrote {out}')
 
 
+def cmd_export(args):
+    out = Path(args.out)
+    if out.exists():
+        raise SystemExit(f'{out} exists; choose a new path')
+    bundle = joblib.load(args.model)
+    if 'teaching' in bundle:
+        x, labels, nights = bundle['teaching']['x'], bundle['teaching']['labels'], bundle['teaching']['nights']
+    elif args.windows:
+        # Models from before the teaching windows were saved: rebuild them exactly as `train` selected them.
+        rows = [r for path in args.windows for r in json.loads(Path(path).read_text()) if r.get('watch') and r['baseline'] is not None]
+        x, labels, nights = matrix(rows), np.asarray([r['label'] for r in rows]), np.asarray([r['night'] for r in rows])
+    else:
+        raise SystemExit(f'{args.model} has no teaching windows; pass the --windows it was trained on')
+    digest = hashlib.sha256(Path(args.model).read_bytes()).hexdigest()
+    write_portable(bundle['final'], x, labels, nights, f'movement_model.py export of model.joblib sha256 {digest}', out)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='command', required=True)
@@ -284,8 +320,12 @@ def main(argv=None):
     e.add_argument('--export', action='append', required=True, help='sessionId=raw-export.tar.gz; repeatable')
     e.add_argument('--workers', type=int, default=4)
     e.add_argument('--out', required=True, help='movement-epochs JSON path (new)')
+    x = sub.add_parser('export', help='portable JSON forest from an existing model.joblib')
+    x.add_argument('model', help='model.joblib from train')
+    x.add_argument('--windows', action='append', default=[], help='windows.json it was trained on, for a model.joblib without teaching windows')
+    x.add_argument('--out', required=True, help='movement.json path (new)')
     args = ap.parse_args(argv)
-    {'train': cmd_train, 'epochs': cmd_epochs}[args.command](args)
+    {'train': cmd_train, 'epochs': cmd_epochs, 'export': cmd_export}[args.command](args)
 
 
 if __name__ == '__main__':
