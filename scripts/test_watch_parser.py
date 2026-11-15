@@ -39,6 +39,18 @@ class ParserTests(unittest.TestCase):
             self.assertEqual(len(m.parse(p)['stages']), 1)
             self.assertEqual(list(Path(d).iterdir()), [p])
 
+    def test_vitals_keep_watch_samples_and_exclude_writeback(self):
+        def vital(kind, value, source='Apple Watch'):
+            return (f'<Record type="HKQuantityTypeIdentifier{kind}" sourceName="{source}" value="{value}" '
+                    'startDate="2026-01-01 22:00:00 -0800" endDate="2026-01-01 22:00:30 -0800"/>')
+        xml = vital('HeartRate', 58) * 2 + vital('HeartRate', 60, 'sleepypod') + vital('RespiratoryRate', 14.5) + vital('HeartRateVariabilitySDNN', 41)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'export.xml'; p.write_text('<HealthData>' + xml + record() + '</HealthData>')
+            result = m.parse_vitals(p)
+        self.assertEqual(result['heartRate'], [(1767333600000, 1767333630000, 58.0)])
+        self.assertEqual(result['respiratoryRate'][0][2], 14.5)
+        self.assertEqual(result['hrvSdnn'][0][2], 41.0)
+
     def test_no_matching_stages_fails(self):
         with self.assertRaises(ValueError): self.parse_xml(record('Phone'))
 

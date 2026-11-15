@@ -283,6 +283,48 @@ uv run --locked python scripts/stage-backtest.py data/runs/RUN/features.json \
   --snapshot data/biometrics.db --out data/runs/backtest
 ```
 
+## Multi-source training
+
+Watch signals teach the pod models; they are never stage-model inputs. Watch stages
+are the stage labels, Watch motion labels the movement model, and Watch heart rate,
+HRV and respiratory rate check the pod's own vitals. Every model input comes from
+the pod, so a model never needs a Watch at night.
+
+```sh
+# Watch vitals, and how far pod vitals are from them epoch by epoch
+uv run --locked python scripts/parse-watch-export.py data/export.zip data/watch-vitals.json --vitals
+uv run --locked python scripts/vitals_reference.py data/runs/RUN/features.json \
+  --snapshot data/biometrics.db --watch-vitals data/watch-vitals.json --out data/runs/vitals
+# Pod movement model, labeled by Watch motion (windows.json from movement.py train --watch-motion)
+uv run --locked python scripts/movement_model.py train --windows data/runs/movement-001/windows.json --out data/runs/movement-model
+uv run --locked python scripts/movement_model.py epochs data/runs/RUN/features.json --snapshot data/biometrics.db \
+  --model data/runs/movement-model/model.joblib --export SESSION_ID=data/raw/session.tar.gz --out data/runs/movement-epochs.json
+# Stage model with pod features, HR quality and movement-model features
+uv run --locked python scripts/fusion.py data/runs/RUN/features.json --snapshot data/biometrics.db \
+  --movement-epochs data/runs/movement-epochs.json --pod-model-trained-through 2026-11-03 --out data/runs/fusion
+```
+
+`vitals_reference.py` reports pod-versus-Watch bias, error and correlation for heart
+rate, breathing rate and HRV (rank only: the pod and Watch compute different HRV
+statistics), how each signal moves with Watch stage, and which pod-only quality
+signals (`hrCoverage`, `hrJitter`, `brCoverage`) predict heart-rate error.
+
+`movement_model.py train` holds out one Watch-motion night at a time and compares the
+pod movement score, the `movement.py` classifier and the new model on 2 s windows and
+5-minute epochs. The model adds the pod score to the raw piezo and capacitance
+features, and its moving threshold is chosen on out-of-bag training predictions.
+`epochs` needs one raw export per sleep session (`GET /api/export/archive`, read-only;
+the pod prunes old archives). A night whose Watch motion trained the model gets the
+model fitted without that night. Raw-piezo features need a core port before a pod can
+compute them.
+
+`fusion.py` evaluates the frozen ablation forest on the nights that have raw exports:
+`base` (podNative), `all` (the podContext columns), `all` plus HR quality, plus
+movement-model features, both (`fused`), and a wake-first `hierarchical_fused`. It
+scores every arm leave-one-night-out and chronologically, against the stages the pod
+recorded live. `--pod-model-trained-through` reports nights after the pod model's
+training separately, because earlier nights are in-sample for it. Nothing is exported.
+
 ## Save and reuse a model
 
 Every successful run automatically saves `model/candidate.json` (portable pod
