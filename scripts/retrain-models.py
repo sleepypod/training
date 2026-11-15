@@ -3,7 +3,9 @@
 Inputs come from export-runtime-features.ts (the production preprocessing).
 Candidate selection is inside each outer held-out night. All known Watch nights
 have already been inspected: this is NOT a prospective validation or a new
-untouched holdout. Model artifacts and features are private local outputs.
+untouched holdout. Locked holdout nights (holdout.py) are dropped before anything
+else; --holdout-final scores the exported candidate on them once, after logging the
+read. Model artifacts and features are private local outputs.
 """
 import argparse
 import hashlib
@@ -16,6 +18,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+import holdout as ho
 from progress import update
 import timelines
 
@@ -167,12 +170,30 @@ def export(clf, name, dataset, output, score):
                 sha256=hashlib.sha256((output / 'candidate.json').read_bytes()).hexdigest())
 
 
+def holdout_final(clf, name, locked, ruleset, sha256, output):
+    """Score the exported candidate once on the locked nights; the read is logged before any scoring."""
+    groups = sorted({n['group'] for n in locked})
+    entry = ho.log_access(ho.run_name(output), sha256, groups, 'final')
+    labeled = [r for n in locked for r in n['rows'] if r['y'] is not None and r['rule'] is not None]
+    return dict(candidate=name, modelSha256=sha256, nights=groups, loggedAt=entry['utc'],
+        scores=metrics(*predict(clf, locked, ruleset)),
+        perNight={g: metrics(*predict(clf, [n for n in locked if n['group'] == g], ruleset)) for g in groups},
+        rules=metrics([r['y'] for r in labeled], [r['rule'] for r in labeled]) if labeled else None)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('features', type=Path)
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--holdout-final', action='store_true',
+                    help='After fitting on development nights only, score the exported candidate once on the locked nights (logged)')
     args = ap.parse_args()
     data = json.loads(args.features.read_text())
+    locked = [n for n in data['nights'] if ho.locked(n['group'])]
+    if args.holdout_final and not locked:
+        raise ValueError('These features hold no locked night groups; --holdout-final has nothing to read')
+    holdout = ho.record({n['group'] for n in data['nights']}, args.holdout_final)
+    data = {**data, 'nights': ho.drop_locked(data['nights'])}
     nights, ruleset = data['nights'], data['ruleset']
     groups = sorted({n['group'] for n in nights})
     if len(groups) < 5:
@@ -184,7 +205,7 @@ def main():
         trainingHelpersSha256=hashlib.sha256(Path(pm.__file__).read_bytes()).hexdigest(),
         candidates=list(CANDIDATES), outer='leave-one-night-group-out', inner='3-fold GroupKFold',
         objective='macro F1 across all four classes, then kappa', preprocessing='production TypeScript',
-        prospective=False, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
+        prospective=False, holdout=holdout, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
     traces = timelines.initial(data)
     timelines.save(traces, args.out)
@@ -251,6 +272,9 @@ def main():
     timelines.save(traces, args.out)
     update('Export', 'Verifying portable export against sklearn')
     artifact = export(clf, final_name, data, args.out, scores['nested'])
+    if args.holdout_final:
+        update('Holdout', f'Final read: {final_name} on {len(holdout["lockedGroups"])} locked night groups (logged)', evaluationStage='holdout final')
+        final = holdout_final(clf, final_name, locked, ruleset, artifact['sha256'], args.out)
     importance = {'method': 'Held-out permutation importance · Δ macro F1',
         'values': {name: float(np.mean([drop for fold in folds for drop in fold['permutationDrops'][name]])) for name in data['features']},
         'std': {name: float(np.std([drop for fold in folds for drop in fold['permutationDrops'][name]])) for name in data['features']},
@@ -259,6 +283,7 @@ def main():
         classCounts=dict(Counter(outputs['nested'][0])),
         watchEpochs=sum(n['watchEpochs'] for n in nights), folds=folds, scores=scores,
         finalSelected=final_name, finalInnerScores=final_inner, temporalAudit=temporal, uncertainty=uncertainty, artifact=artifact,
+        **(dict(holdoutFinal=final) if args.holdout_final else {}),
         limitations=['Same-person retrospective reuse; a future night is required for prospective validation.',
             'Whole-night normalization and centered windows are retrospective, not a live classifier.',
             'Sparse awake labels; wake recall is not established.',
@@ -266,6 +291,8 @@ def main():
             'No upload or activation performed.'])
     (args.out / 'report.json').write_text(json.dumps(report, indent=2))
     print(f'Evaluation complete: selected {final_name}; nested macro F1 {scores["nested"]["macroF1"]:.3f}', flush=True)
+    if args.holdout_final:
+        print(f'Locked holdout ({len(final["nights"])} night groups, read logged): macro F1 {final["scores"]["macroF1"]:.3f}', flush=True)
 
 
 if __name__ == '__main__':

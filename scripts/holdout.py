@@ -22,7 +22,10 @@ PURPOSES = ('trial', 'final')
 
 def locked(night):
     """True for a locked night group ('YYYY-MM-DD')."""
-    offset = (date.fromisoformat(night) - date.fromisoformat(FREEZE)).days
+    try:
+        offset = (date.fromisoformat(night) - date.fromisoformat(FREEZE)).days
+    except (TypeError, ValueError):
+        raise ValueError(f'Night group {night!r} is not a YYYY-MM-DD date, so the locked holdout cannot be applied') from None
     return offset >= 0 and offset % EVERY == 0
 
 
@@ -69,3 +72,21 @@ def file_sha256(path):
 def protocol():
     """The rule as recorded in every run's protocol."""
     return dict(freeze=FREEZE, every=EVERY, rule=RULE, accessLog='data/holdout-access.jsonl')
+
+
+def record(groups, holdout_final=False):
+    """protocol() plus the locked groups among a run's input and what the run did with them."""
+    return dict(protocol(), lockedGroups=split(groups)[1],
+                lockedUse='one logged final read of the exported candidate' if holdout_final else 'dropped before any fitting, selection or analysis')
+
+
+def run_name(path):
+    """A run directory as the access log names it: relative to the primary checkout when inside it."""
+    path = Path(path).resolve()
+    return str(path.relative_to(primary_root())) if path.is_relative_to(primary_root()) else str(path)
+
+
+def refuse_final(parser, why):
+    """Exit on --holdout-final where a run fits, tunes or compares on the nights it scores."""
+    parser.error(f'--holdout-final is refused here: {why}. Locked nights are read only by a fixed model: '
+                 'retrain-models.py --holdout-final for its exported candidate, stage-backtest.py --trial for deployed models.')

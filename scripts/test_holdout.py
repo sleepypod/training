@@ -1,8 +1,12 @@
 """The locked-holdout rule and its access log."""
+from contextlib import redirect_stderr
+import importlib.util
+import io
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import holdout as ho
@@ -34,6 +38,32 @@ class HoldoutTests(unittest.TestCase):
             self.assertEqual([e['nights'] for e in entries], [['2026-11-14'], ['2026-11-18']])
             self.assertEqual(entries[0]['purpose'], 'final')
             self.assertEqual(ho.accesses(Path(directory) / 'missing.jsonl'), [])
+
+
+    def test_protocol_records_the_locked_groups_and_their_use(self):
+        record = ho.record(['2026-11-13', '2026-11-14', '2026-11-18', '2026-11-14'])
+        self.assertEqual(record['lockedGroups'], ['2026-11-14', '2026-11-18'])
+        self.assertEqual((record['freeze'], record['every']), ('2026-11-14', 4))
+        self.assertIn('dropped', record['lockedUse'])
+        self.assertIn('final read', ho.record([], holdout_final=True)['lockedUse'])
+
+    def test_groups_that_are_not_dates_cannot_be_judged(self):
+        with self.assertRaisesRegex(ValueError, 'not a YYYY-MM-DD'):
+            ho.locked('night-3')
+
+    def test_scripts_that_fit_or_compare_refuse_a_final_read(self):
+        scripts = {'stage-backtest.py': ['f.json', '--snapshot', 'x.db', '--out', 'o'],
+                   'feature-ablation.py': ['f.json', '--snapshot', 'x.db', '--out', 'o'],
+                   'fusion.py': ['f.json', '--snapshot', 'x.db', '--movement-epochs', 'm.json', '--out', 'o'],
+                   'sequence-decoding.py': ['f.json', '--out', 'o']}
+        for name, argv in scripts.items():
+            spec = importlib.util.spec_from_file_location(name[:-3].replace('-', '_'), Path(__file__).with_name(name))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with self.subTest(name), patch('sys.argv', [name, *argv, '--holdout-final']), \
+                    redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit):
+                module.main()
+            self.assertIn('--holdout-final is refused here', stderr.getvalue())
 
 
 if __name__ == '__main__':

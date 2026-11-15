@@ -1,5 +1,6 @@
 # Evaluation
 
+- [Locked holdout](locked-holdout.md) — From the night of 2026-11-14, every fourth night group is locked: only a deployed model's trial and one final read of a finished candidate may score it, and every read is logged.
 - [Cross-fitted fusion rerun: 2026-11-15](fusion-cross-fitted-2026-11-15.md) — With the movement-teacher leak removed, podContext ties the live pod model on 9 unseen nights (0.545 vs 0.533 macro F1); wake-first is best (+0.030, exploratory); movement-model features add nothing.
 - [Literature feature ablation: 2026-11-03](feature-ablation-2026-11-03.md) — On 23 night groups, temporal-context and arousal features from pod data raised light F1 from 0.68 to 0.75–0.78 and κ from 0.38 to 0.46–0.48; a chronological backtest kept the gain, with the flat forest the balanced choice. Wake stayed at zero recall.
 - [Piezo bandwidth gate: 2026-10-22](piezo-bandwidth-2026-10-22.md) — In one scripted session on one pod, imitated snoring raised raw piezo energy in both snore bands well above the pass bar; a 10-hour night had full coverage at about 13 MB/hour archived. Real snoring is untested.

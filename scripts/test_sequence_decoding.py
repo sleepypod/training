@@ -103,16 +103,16 @@ class SequenceDecodingTests(unittest.TestCase):
         self.assertEqual(max(p['weight'] for p in m.GRID), 32.0)
 
     def test_main_rejects_too_few_groups_and_reused_output(self):
-        nights = [{**session([1, 2], start=g * 100_000), 'group': f'g{g}'} for g in range(6)]
+        nights = [{**session([1, 2], start=g * 100_000), 'group': f'2026-10-{g + 1:02d}'} for g in range(6)]
         with tempfile.TemporaryDirectory() as root:
             features = Path(root) / 'features.json'
             features.write_text(json.dumps({'nights': nights[:4], 'ruleset': {}, 'sources': {}}))
             with patch('sys.argv', ['x', str(features), '--out', str(Path(root) / 'a')]), self.assertRaisesRegex(ValueError, 'five'):
                 m.main()
-            unlabeled = nights[:5] + [{**session([None, None], start=900_000), 'group': 'g9'}]
+            unlabeled = nights[:5] + [{**session([None, None], start=900_000), 'group': '2026-10-10'}]
             features.write_text(json.dumps({'nights': unlabeled, 'ruleset': {}, 'sources': {}}))
             with patch.object(m.rm, 'fit') as fit, patch.object(m, 'decode') as decode, \
-                    patch('sys.argv', ['x', str(features), '--out', str(Path(root) / 'u')]), self.assertRaisesRegex(ValueError, 'g9'):
+                    patch('sys.argv', ['x', str(features), '--out', str(Path(root) / 'u')]), self.assertRaisesRegex(ValueError, '2026-10-10'):
                 m.main()
             fit.assert_not_called()
             decode.assert_not_called()

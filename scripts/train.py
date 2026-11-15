@@ -56,6 +56,7 @@ def main():
     ap.add_argument('--source', default='Watch')
     ap.add_argument('--side', choices=['left', 'right'], required=True)
     ap.add_argument('--contract', choices=['podNative', 'podContext'], default='podNative', help='Feature contract the pod computes for the model')
+    ap.add_argument('--holdout-final', action='store_true', help='Score the exported candidate once on the locked holdout nights (logged); training never uses them')
     ap.add_argument('--timezone', help='IANA timezone; default from pod, required with --snapshot')
     ap.add_argument('--verbose', action='store_true', help='Keep every progress event as a terminal log line')
     ap.add_argument('--dashboard', action='store_true', help='Serve a live loopback dashboard; stays open until Ctrl-C')
@@ -103,7 +104,7 @@ def main():
         run(tsx, str(ROOT / 'scripts/export-runtime-features.ts'), str(snapshot), str(watch), str(features), args.side, args.timezone, args.contract)
         summarize_features(features, time.perf_counter() - extraction_started)
         model = output / 'model'
-        run(sys.executable, str(ROOT / 'scripts/retrain-models.py'), str(features), '--out', str(model))
+        run(sys.executable, str(ROOT / 'scripts/retrain-models.py'), str(features), '--out', str(model), *(['--holdout-final'] if args.holdout_final else []))
         update('Parity', 'Checking every exported prediction in TypeScript')
         run(tsx, str(ROOT / 'scripts/verify-portable.ts'), str(model))
         agreement = [sys.executable, str(ROOT / 'scripts/reference_agreement.py'), '--snapshot', str(snapshot), '--side', args.side,

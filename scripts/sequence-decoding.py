@@ -2,8 +2,9 @@
 
 Fixed forest configurations (no candidate selection) are fitted once per outer
 held-out night group; every decoder scores the same fitted forest. Transition
-matrices and decoder hyperparameters come from training nights only. This is
-not a prospective validation and never exports or activates a model.
+matrices and decoder hyperparameters come from training nights only. Locked
+holdout nights (holdout.py) are dropped first. This is not a prospective
+validation and never exports or activates a model.
 """
 import argparse
 import hashlib
@@ -21,6 +22,7 @@ spec = importlib.util.spec_from_file_location('retraining', Path(__file__).with_
 rm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rm)
 pm = rm.pm
+import holdout as ho
 
 MODELS = ('existing_depth8', 'balanced_leaf10')
 DECODERS = ('production', 'argmax', 'viterbi', 'viterbi_no_deep_rem')
@@ -140,9 +142,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('features', type=Path)
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--holdout-final', action='store_true', help='Refused: decoder hyperparameters are tuned and compared on the nights it scores')
     args = ap.parse_args()
+    if args.holdout_final:
+        ho.refuse_final(ap, 'decoder hyperparameters are tuned and decoders compared')
     data = json.loads(args.features.read_text())
-    nights, ruleset = data['nights'], data['ruleset']
+    holdout = ho.record({n['group'] for n in data['nights']})
+    nights, ruleset = ho.drop_locked(data['nights']), data['ruleset']
     groups = sorted({n['group'] for n in nights})
     if len(groups) < 5:
         raise ValueError('Need at least five independent night groups')
@@ -159,7 +165,7 @@ def main():
         selection='none: fixed forest configurations; this is a decoder ablation, not candidate selection',
         gaps='decoded in row order across gaps with one transition step, as production postprocessing does; transitions counted only between consecutive labeled epochs',
         emissions='weight × log predict_proba; no prior division because both forests train on class-balanced data',
-        prospective=False, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
+        prospective=False, holdout=holdout, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
     outputs = {(m, d): ([], []) for m in MODELS for d in DECODERS}
     night_scores = {(m, d): [] for m in MODELS for d in DECODERS}

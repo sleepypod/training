@@ -1,7 +1,13 @@
 """Behavioral checks for the chronological stage backtest."""
+from contextlib import redirect_stdout
+import hashlib
 import importlib.util
+import io
+import json
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -36,6 +42,31 @@ class StageBacktestTests(unittest.TestCase):
     def test_pod_live_uses_only_labeled_epochs_with_a_recorded_stage(self):
         night = {'rows': [{'y': 1, 'pod': 1}, {'y': None, 'pod': 2}, {'y': 3, 'pod': None}, {'y': 2, 'pod': 3}]}
         self.assertEqual(m.pod_live([night]), ([1, 2], [1, 3]))
+
+
+    def test_locked_nights_are_dropped_before_any_feature_or_fit(self):
+        nights = [{'id': i, 'group': g, 'rows': []} for i, g in enumerate(['2026-11-12', '2026-11-13', '2026-11-14', '2026-11-15'])]
+        with tempfile.TemporaryDirectory() as d:
+            snapshot = Path(d) / 'biometrics.db'
+            snapshot.write_bytes(b'')
+            features = Path(d) / 'features.json'
+            features.write_text(json.dumps({'nights': nights, 'features': [], 'ruleset': {}, 'side': 'left',
+                                            'sources': {'snapshot': hashlib.sha256(b'').hexdigest()}}))
+            augmented, scored = [], []
+            def augment(night, *_):
+                augmented.append(night['group'])
+                return []
+            def run(kind, nights, *_):
+                scored.extend(n['group'] for n in nights)
+                return dict(nights=[], pooled={}, comparisons={})
+            with patch.object(m.fa, 'augment', side_effect=augment), patch.object(m, 'run', side_effect=run), \
+                    patch('sys.argv', ['x', str(features), '--snapshot', str(snapshot), '--out', str(Path(d) / 'out')]), \
+                    redirect_stdout(io.StringIO()):
+                m.main()
+            report = json.loads((Path(d) / 'out/report.json').read_text())
+        self.assertNotIn('2026-11-14', augmented + scored)
+        self.assertEqual(len(augmented), 3)
+        self.assertEqual(report['protocol']['holdout']['lockedGroups'], ['2026-11-14'])
 
 
 if __name__ == '__main__':
