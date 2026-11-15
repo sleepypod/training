@@ -4,6 +4,7 @@ On macOS, Local Network privacy refuses LAN connections from interpreters that l
 permission (EHOSTUNREACH, "No route to host") although the pod is reachable; Apple's own
 curl is exempt. `open_url` retries exactly that refusal once through curl and returns a
 response with the same `read`, `headers` and `status`, or raises the same HTTPError.
+It takes a URL or a `urllib.request.Request` (method, headers and body are carried over).
 """
 import email
 import errno
@@ -12,6 +13,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import urllib.error
+import urllib.request
 
 CURL = Path('/usr/bin/curl')
 
@@ -53,12 +55,21 @@ def parse_head(text):
     return int(parts[1]), parts[2] if len(parts) > 2 else '', email.message_from_string(rest + '\n\n')
 
 
-def curl_open(url, timeout, curl=CURL):
+def curl_open(request, timeout, curl=CURL):
+    if not isinstance(request, urllib.request.Request):
+        request = urllib.request.Request(request)
+    url = request.full_url
+    options = ['-X', request.get_method()]
+    for name, value in request.header_items():
+        options += ['-H', f'{name}: {value}']
     # urllib's timeout is per socket operation, so stall detection, not a total limit.
     with tempfile.TemporaryDirectory() as directory:
         head, body = Path(directory) / 'head', Path(directory) / 'body'
+        if request.data is not None:
+            (Path(directory) / 'request').write_bytes(request.data)
+            options += ['--data-binary', '@' + str(Path(directory) / 'request')]
         result = subprocess.run([str(curl), '-sS', '--connect-timeout', str(timeout), '--speed-limit', '1', '--speed-time', str(timeout),
-                                 '-D', str(head), '-o', str(body), '--', url], capture_output=True, text=True)
+                                 *options, '-D', str(head), '-o', str(body), '--', url], capture_output=True, text=True)
         if result.returncode != 0:
             raise urllib.error.URLError(result.stderr.strip() or f'curl exited with {result.returncode}')
         status, reason, headers = parse_head(head.read_text('latin-1'))
@@ -68,13 +79,13 @@ def curl_open(url, timeout, curl=CURL):
     return CurlResponse(status, headers, stream)
 
 
-def open_url(opener, url, timeout):
-    """`opener.open(url, timeout=timeout)`, retried through curl when macOS refuses the LAN connection."""
+def open_url(opener, request, timeout):
+    """`opener.open(request, timeout=timeout)`, retried through curl when macOS refuses the LAN connection."""
     try:
-        return opener.open(url, timeout=timeout)
+        return opener.open(request, timeout=timeout)
     except urllib.error.HTTPError:
         raise
     except urllib.error.URLError as error:
         if not (refused_by_privacy(error) and CURL.exists()):
             raise
-    return curl_open(url, timeout)
+    return curl_open(request, timeout)

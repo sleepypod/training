@@ -27,6 +27,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        received = self.rfile.read(int(self.headers['Content-Length']))
+        body = b'{"method":"POST","type":"' + self.headers['Content-Type'].encode() + b'","echo":' + received + b'}'
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *args):
         pass
 
@@ -76,6 +84,12 @@ class PodHttpTests(unittest.TestCase):
         with patch.object(pod_http, 'curl_open') as curl, pod_http.open_url(opener, self.base + '/ok', 5) as response:
             self.assertEqual(response.read(), b'\r\n\r\n{"ok": true}')
             curl.assert_not_called()
+
+    @unittest.skipUnless(pod_http.CURL.exists(), 'needs /usr/bin/curl')
+    def test_posts_keep_method_headers_and_body_through_curl(self):
+        request = urllib.request.Request(self.base + '/preview', data=b'{"side":"left"}', headers={'Content-Type': 'application/json'}, method='POST')
+        with pod_http.open_url(Refusing(), request, 5) as response:
+            self.assertEqual(response.read(), b'{"method":"POST","type":"application/json","echo":{"side":"left"}}')
 
     def test_last_head_wins_after_interim_responses(self):
         status, reason, headers = pod_http.parse_head('HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 429 Too Many Requests\r\nRetry-After: 60\r\n\r\n')
