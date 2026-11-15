@@ -159,15 +159,24 @@ def records(raw_bytes):
             yield None, str(error)
 
 
-def export_files(tar_path):
-    """Yield (name, compressed_size, raw_bytes) for every RAW file in an /api/export/archive tarball."""
+def export_members(tar_path):
+    """Yield (name, stored_bytes) for every RAW file in an /api/export/archive tarball, as the pod stored it."""
     with tarfile.open(tar_path, 'r:gz') as tar:
         for member in tar.getmembers():
             name = Path(member.name).name
             if not member.isfile() or not name.upper().endswith(('.RAW', '.RAW.GZ')) or name.upper() == 'SEQNO.RAW':
                 continue
-            raw = tar.extractfile(member).read()
-            yield name, len(raw), gzip.decompress(raw) if name.lower().endswith('.gz') else raw
+            yield name, tar.extractfile(member).read()
+
+
+def decompress(name, stored):
+    return gzip.decompress(stored) if name.lower().endswith('.gz') else stored
+
+
+def export_files(tar_path):
+    """Yield (name, compressed_size, raw_bytes) for every RAW file in an /api/export/archive tarball."""
+    for name, stored in export_members(tar_path):
+        yield name, len(stored), decompress(name, stored)
 
 
 def samples(buffer):
