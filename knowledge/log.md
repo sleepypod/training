@@ -1,5 +1,9 @@
 # Knowledge update log
 
+## 2026-11-15
+
+- **Creation**: Captured the [cross-fitted fusion rerun](evaluation/fusion-cross-fitted-2026-11-15.md) after fixing the movement-teacher leak; conclusions unchanged. No model activation.
+
 ## 2026-11-04
 
 - **Creation**: Captured [reference devices](data/reference-devices.md): wearable measurements are optional, compared per device and never model features.
