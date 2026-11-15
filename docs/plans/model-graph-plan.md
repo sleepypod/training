@@ -134,7 +134,7 @@ when the set is uploaded (`sleepypod-core-133`). Proposed shape:
   "nodes": {
     "vitals": { "engine": "<manifest sha256>", "profile": "<config sha256>", "binding": "expected" },
     "movementModel": { "version": "movementRaw-v1-20261201", "sha256": "<file sha256>", "binding": "pinned" },
-    "stage": { "version": "research-…", "sha256": "<file sha256>", "contract": "podContextMovement-v1", "binding": "pinned" }
+    "stage": { "version": "research-…", "sha256": "<core dataHash of the stored model>", "contract": "podContextMovement-v1", "binding": "pinned" }
   },
   "training": {
     "nights": { "first": "2026-10-18", "last": "2026-11-30", "count": 38, "lockedExcluded": 4 },
@@ -146,7 +146,9 @@ when the set is uploaded (`sleepypod-core-133`). Proposed shape:
 ```
 
 - `pinned`: the pod refuses to activate the set unless that exact SHA-256 is installed, and
-  activates and rolls back pinned nodes together.
+  activates and rolls back pinned nodes together. A stage model's SHA-256 is core's `dataHash`
+  of the model as the pod stores it (canonical JSON, `epochSeconds` defaulted to 300), not the
+  file's bytes (core #930; `scripts/modelset.py` reproduces it).
 - `expected`: vitals stay owned by biometrics tuning, not by the set, because a profile change
   must not need a stage-model upload. The pod records a mismatch instead of refusing (Q6).
 - `inputs` is `replayed` (C5, one pinned engine and profile for every night) or `live`
@@ -157,9 +159,11 @@ when the set is uploaded (`sleepypod-core-133`). Proposed shape:
 For every archived night, `scripts/lineage.py` (new, A1b) records which version of each node
 produced the stored outputs:
 
-- `vitals.engine` and `vitals.profile` from the archive tables `biometric_runtime_configs` and
-  `biometric_runtime_receipts` (active generation at each minute; a night that spans a change is
-  marked `mixed`);
+- `vitals.engine` and `vitals.profile` from each vitals row's processing run
+  (`vitals.processing_run_id` → `biometric_processing_runs`: bundle manifest hash and config hash),
+  the same identity core uses for `inputMismatch`; a night with more than one pair is `mixed`, one
+  with no recorded run `unknown`. Runtime receipts are only a fallback: they miss a drop to
+  defaults (generation 0 writes none);
 - core build from the pull record's verbatim manifest (`build.commitHash`);
 - stage output version: the selection at read time, since the pod restages on read.
 
