@@ -252,6 +252,18 @@ class TrialTests(unittest.TestCase):
         [report] = (self.out / 'scored').glob('*/trial.json')
         self.assertEqual(json.loads(report.read_text())['protocol']['snapshotSha256'], hashlib.sha256(snapshot.read_bytes()).hexdigest())
 
+    def test_model_hash_is_cores_stage_model_sha256(self):
+        # Golden value from core src/lib/tests/stage-model-set.test.ts (core PR #930).
+        model = dict(version='test-forest', kind='forest', classes=['wake', 'light', 'deep', 'rem'],
+                     featureContract=['hrZ', 'hrStdZ', 'motionZ', 'nightFraction'],
+                     trees=[dict(f=[0, -1, -1], t=[-0.5, 0, 0], l=[1, -1, -1], r=[2, -1, -1], v=[[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]])],
+                     testVectors=[dict(inputs=dict(hrZ=-1, hrStdZ=0, motionZ=0, nightFraction=0.5), expected=2),
+                                  dict(inputs=dict(hrZ=1, hrStdZ=0, motionZ=0, nightFraction=0.5), expected=1)],
+                     metrics=dict(kappa=0.1, note='é'))
+        self.assertEqual(m.model_sha256(model), '6fe42238f142207ca4016e4fe243a439e63e362043938fa15d4f09bdcf2c7906')
+        self.assertEqual(m.model_sha256({**model, 'epochSeconds': 300.0}), m.model_sha256(model))
+        self.assertEqual(m.canonical_json({'b': 1e-7, 'a': -0.0}), '{"a":0,"b":0.0000000999999999999999954748111825886258685613938723690807819366455078125}')
+
     def test_in_sample_nights_are_kept_but_not_compared(self):
         entries = [dict(side='left', night='2026-11-14', modelId=i, outOfSample=i == 2, locked=True,
                         metrics=dict(macroF1=.5, kappa=.4)) for i in (2, 3)]

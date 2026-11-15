@@ -329,8 +329,8 @@ uv run --locked python scripts/stage-backtest.py --trial --pod 192.168.1.88 --si
 ```
 
 Each run appends one line per (night, model) to `data/runs/trial-id3/weekly.jsonl`
-with the model id, version, SHA-256 (keys sorted, numbers as doubles, so a pod copy
-and a local file agree), training cutoff, `outOfSample`, `locked`, metrics and
+with the model id, version, SHA-256 (core's `stageModelSha256`: canonical JSON with
+exact decimal numbers, so a pod copy and a local file agree), training cutoff, `outOfSample`, `locked`, metrics and
 `scoredAt`. Re-scoring a night replaces its lines. A night counts as out of sample
 only after a model's training cutoff, taken from `--trained-through ID=YYYY-MM-DD`,
 the model's `metrics.trainedThrough`, or the last night group of the run the local

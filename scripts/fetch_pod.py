@@ -70,7 +70,7 @@ class Pod:
         """A POST route that only reads (model preview); recorded like a GET, with the body's hash."""
         payload = json.dumps(body, separators=(',', ':')).encode()
         request = urllib.request.Request(self.base + '/api/' + path, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
-        with self.opener.open(request, timeout=120) as response:
+        with open_url(self.opener, request, 120) as response:
             raw = response.read()
         self.bytes += len(raw)
         update('Fetching', f'POST {path}: {len(raw):,} bytes')

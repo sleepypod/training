@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 import hashlib
 import importlib.util
 import json
+import math
 from math import comb
 from pathlib import Path
 import sqlite3
@@ -123,18 +124,40 @@ def run(kind, nights, features, extras, ruleset, rng):
     return dict(nights=per_night, pooled=summary, comparisons=comparisons)
 
 
-def model_sha256(model):
-    """SHA-256 of a model document however it was serialized, so a pod copy and a local file agree.
+def canonical_json(value):
+    """Core's finite-binary64-json-v1 (modules/common/biometrics/config.py canonical_json): keys sorted
+    by UTF-16, no whitespace, each number as its exact decimal expansion, so Python and JS agree."""
+    def visit(item):
+        if item is None:
+            return 'null'
+        if isinstance(item, bool):
+            return 'true' if item else 'false'
+        if isinstance(item, (int, float)):
+            number = float(item)
+            if not math.isfinite(number):
+                raise ValueError('Non-finite JSON number')
+            if number == 0:
+                return '0'
+            numerator, denominator = abs(number).as_integer_ratio()
+            places = denominator.bit_length() - 1
+            digits = str(numerator * 5 ** places)
+            if places:
+                digits = digits.zfill(places + 1)
+                digits = (digits[:-places] + '.' + digits[-places:]).rstrip('0').rstrip('.')
+            return ('-' if number < 0 else '') + digits
+        if isinstance(item, str):
+            return json.dumps(item, ensure_ascii=False, separators=(',', ':'))
+        if isinstance(item, list):
+            return '[' + ','.join(visit(child) for child in item) + ']'
+        if isinstance(item, dict):
+            return '{' + ','.join(visit(key) + ':' + visit(item[key]) for key in sorted(item, key=lambda key: key.encode('utf-16-be'))) + '}'
+        raise ValueError('Expected finite JSON data')
+    return visit(value)
 
-    Keys are sorted and every number is hashed as a double: the pod's JavaScript writes 1.0 as 1.
-    """
-    def plain(value):
-        if isinstance(value, dict):
-            return {k: plain(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [plain(v) for v in value]
-        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else value
-    return hashlib.sha256(json.dumps(plain(model), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+def model_sha256(model):
+    """Core's stageModelSha256: SHA-256 of the model as the pod stores it (epochSeconds defaults to 300)."""
+    return hashlib.sha256(canonical_json({'epochSeconds': 300, **model}).encode('utf-8')).hexdigest()
 
 
 def watch_stages(snapshot, side):
