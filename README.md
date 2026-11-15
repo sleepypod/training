@@ -375,7 +375,8 @@ pod movement score, the `movement.py` classifier and the new model on 2 s window
 5-minute epochs. The model adds the pod score to the raw piezo and capacitance
 features, and its moving threshold is chosen on out-of-bag training predictions.
 `epochs` needs one raw export per sleep session (`GET /api/export/archive`, read-only;
-the pod prunes old archives). Its features are cross-fitted: each session is scored by a
+the pod prunes old archives), or `--archive data/archive/<podId>` to read every session's
+raw from the off-pod archive; an `--export` still wins for its session. Its features are cross-fitted: each session is scored by a
 model fitted without every Watch-motion night whose windows fall inside it, and once more
 per other Watch-motion night T by a model also fitted without T. `model.joblib` keeps the
 teaching windows so these models can be refitted; one trained by an earlier version is refused.
@@ -448,6 +449,22 @@ uv run --locked python scripts/parse-watch-export.py data/export.zip data/watch.
 uv run --locked python scripts/parse-watch-export.py data/export.zip data/watch-vitals.json --vitals
 uv run --locked python scripts/watch_sidecar.py import --archive data/archive/<podId> --side left \
   --timezone America/Los_Angeles --stages data/watch.json --vitals data/watch-vitals.json
+```
+
+The archive database works as `--snapshot` for `train.py`, `export-runtime-features.ts` and
+the stage scripts, and its raw as `movement_model.py epochs --archive`. Archived RAW files
+for a session's window are chosen like the pod's export (mtime within 20 min before and
+45 min after) and decode to the same records as a tarball of those files. Each pull rewrites
+`biometrics.db`, and the scripts check the snapshot's SHA-256 against the features, so copy
+the database into the run folder first to keep a run reproducible:
+
+```sh
+cp data/archive/<podId>/biometrics.db data/runs/RUN/biometrics.db
+uv run --locked python scripts/train.py --snapshot data/runs/RUN/biometrics.db \
+  --watch-export data/export.zip --side left --timezone America/Los_Angeles --out data/runs/RUN/train
+uv run --locked python scripts/movement_model.py epochs data/runs/RUN/train/features.json \
+  --snapshot data/runs/RUN/biometrics.db --model data/runs/movement-model/model.joblib \
+  --archive data/archive/<podId> --out data/runs/RUN/movement-epochs.json
 ```
 
 ## Save and reuse a model

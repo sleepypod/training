@@ -3,7 +3,7 @@
   train   Leave-one-night-out comparison of the pod movement score, the movement.py
           classifier and this model, on 2 s windows and on 5-minute epochs, then fit
           one model per held-out night plus one on every night.
-  epochs  Apply the model to raw exports of sleep sessions and write per-epoch
+  epochs  Apply the model to raw exports (or the off-pod archive) of sleep sessions and write per-epoch
           movement features for the stage model, cross-fitted: a session gets a model
           fitted without every Watch-motion night whose windows fall inside it, plus
           one variant per other Watch-motion night T fitted without T as well, so a
@@ -213,9 +213,13 @@ def epoch_features(fitted, windows):
 
 def one_session(job):
     """Window features for one session; the parent process applies every model it needs."""
-    export, night, side, movement = job
-    recs, errors, _ = pb.load_export(export)
-    return night['id'], session_windows(recs, side, night['rows'], movement), len(errors), hashlib.sha256(Path(export).read_bytes()).hexdigest()
+    source, night, side, movement = job
+    recs, errors, _ = pb.load_export(source, night['start'], night['end'])
+    if Path(source).is_dir():
+        identity = dict(archiveRawSha256=[sha for _, _, sha in rp.archive_window(source, night['start'], night['end'])])
+    else:
+        identity = dict(exportSha256=hashlib.sha256(Path(source).read_bytes()).hexdigest())
+    return night['id'], session_windows(recs, side, night['rows'], movement), len(errors), identity
 
 
 def own_exclusions(night, teaching):
@@ -261,24 +265,33 @@ def cmd_epochs(args):
     models = CrossFitted(bundle)
     teaching_nights = sorted(set(bundle['teaching']['nights'].tolist()))
     by_id = {str(n['id']): n for n in data['nights']}
+    exports = dict(value.partition('=')[::2] for value in args.export)
+    # Local exports win for their sessions (pre-archive nights); the archive covers the rest.
+    sources = {}
+    for session in (list(by_id) if args.archive else exports):
+        if session in exports:
+            sources[session] = exports[session]
+        elif rp.archive_window(args.archive, by_id[session]['start'], by_id[session]['end']):
+            sources[session] = args.archive
+        else:
+            print(f'Session {session} ({by_id[session]["group"]}): no archived raw; skipped', flush=True)
     jobs = []
     with sqlite3.connect(f'file:{Path(args.snapshot).resolve()}?mode=ro', uri=True) as db:
-        for value in args.export:
-            session, _, export = value.partition('=')
+        for session, export in sources.items():
             night = by_id[session]
             movement = db.execute('select timestamp, total_movement from movement where side=? and timestamp>=? and timestamp<? order by timestamp',
                                   (data['side'], night['start'] - 120, night['end'] + 120)).fetchall()
             jobs.append((export, night, data['side'], movement))
     sessions = {}
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        for night_id, windows, decode_errors, export_sha in pool.map(one_session, jobs):
+        for night_id, windows, decode_errors, identity in pool.map(one_session, jobs):
             session = str(night_id)
             night = by_id[session]
             own = own_exclusions(night, bundle['teaching'])
             rows = epoch_features(models.get(own), windows)
             excluding = {t: epoch_features(models.get(own | {t}), windows) for t in teaching_nights if t not in own}
             sessions[session] = dict(group=night['group'], model=label(own), excludedNights=sorted(own), decodeErrors=decode_errors,
-                                     exportSha256=export_sha, rows=rows, excluding=excluding)
+                                     **identity, rows=rows, excluding=excluding)
             covered = [r['coverage'] for r in rows]
             print(f"Session {session} ({night['group']}, {label(own)}): {len(covered)} epochs, mean raw coverage {np.mean(covered):.0%}", flush=True)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -317,7 +330,8 @@ def main(argv=None):
     e.add_argument('features', help='features.json from export-runtime-features.ts')
     e.add_argument('--snapshot', required=True, help='The biometrics snapshot those features came from')
     e.add_argument('--model', required=True, help='model.joblib from train')
-    e.add_argument('--export', action='append', required=True, help='sessionId=raw-export.tar.gz; repeatable')
+    e.add_argument('--export', action='append', default=[], help='sessionId=raw-export.tar.gz; repeatable')
+    e.add_argument('--archive', help='archive pod directory (data/archive/<podId>): raw for every session without an --export')
     e.add_argument('--workers', type=int, default=4)
     e.add_argument('--out', required=True, help='movement-epochs JSON path (new)')
     x = sub.add_parser('export', help='portable JSON forest from an existing model.joblib')
@@ -325,6 +339,8 @@ def main(argv=None):
     x.add_argument('--windows', action='append', default=[], help='windows.json it was trained on, for a model.joblib without teaching windows')
     x.add_argument('--out', required=True, help='movement.json path (new)')
     args = ap.parse_args(argv)
+    if args.command == 'epochs' and not (args.export or args.archive):
+        ap.error('epochs needs --archive or at least one --export')
     {'train': cmd_train, 'epochs': cmd_epochs, 'export': cmd_export}[args.command](args)
 
 

@@ -123,7 +123,7 @@ class MovementModelTests(unittest.TestCase):
             windows = [(0, rng.normal(size=(3, 21)), 4), (300, np.zeros((0, 21)), 4)]
             out = root / 'epochs.json'
             with patch.object(mm, 'ProcessPoolExecutor', InProcess), \
-                 patch.object(mm, 'one_session', lambda job: (job[1]['id'], windows, 0, 'sha')):
+                 patch.object(mm, 'one_session', lambda job: (job[1]['id'], windows, 0, {'exportSha256': 'sha'})):
                 mm.main(['epochs', str(features), '--snapshot', str(db), '--model', str(model), '--export', '7=x.tar.gz', '--out', str(out)])
             session = json.loads(out.read_text())['sessions']['7']
             self.assertEqual(session['excludedNights'], ['b'])
