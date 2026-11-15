@@ -74,6 +74,9 @@ HTTP on port 3000; `--pod hostname:port` also works. It reads the pod timezone,
 completed sessions from the last 30 days, vitals, movement, imported Watch labels,
 and the current stage rules. Use `--days 14` to change the window or `--timezone`
 to explicitly override the pod setting. No MCP client or SSH is needed.
+On macOS, Local Network privacy can refuse Python's connection to the pod (`No route
+to host`) although `curl` reaches it; pod reads then retry once through `/usr/bin/curl`,
+which is exempt. Grant your terminal Local Network access in System Settings to avoid it.
 
 If Watch labels are not already imported on the pod, add
 `--watch-export data/export.zip` or `--watch-json data/watch.json`. Fetching does

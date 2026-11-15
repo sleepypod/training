@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
+from pod_http import open_url
 from progress import update
 
 
@@ -52,7 +53,7 @@ class Pod:
 
     def get(self, path, **params):
         url = self.base + '/api/' + path + ('?' + urllib.parse.urlencode(params) if params else '')
-        with self.opener.open(url, timeout=30) as response:
+        with open_url(self.opener, url, 30) as response:
             raw = response.read()
         self.bytes += len(raw)
         elapsed = time.perf_counter() - self.started
