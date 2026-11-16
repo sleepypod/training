@@ -2,14 +2,17 @@
 import argparse
 import base64
 from functools import lru_cache
+import hmac
 import json
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import secrets
 from threading import Thread
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from run_history import Catalog, local_data_roots, read_json, run_kind
+from web_jobs import JobError, JobRunner
 
 UI = Path(__file__).with_name('ui')
 
@@ -108,17 +111,64 @@ def write_report(output):
     temp.replace(root / 'index.html')
 
 
-def serve(output=None, catalog=None, port=0):
+def serve(output=None, catalog=None, port=0, jobs=None):
+    """Loopback viewer. With a JobRunner, also /api/jobs, guarded by a per-launch token in the page."""
     catalog = catalog or Catalog()
     key = catalog.register(output) if output else None
+    token = secrets.token_urlsafe(32) if jobs else None
     class Handler(BaseHTTPRequestHandler):
+        def send(self, status, data, kind='application/json'):
+            self.send_response(status)
+            self.send_header('Content-Type', kind + '; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            try: self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError): pass
+        def reply(self, status, doc):
+            self.send(status, json.dumps(doc, allow_nan=False).encode())
+        def loopback_host(self):
+            # A DNS-rebound name resolves here too; only loopback names may read the page that holds the token.
+            port = self.server.server_port
+            return self.headers.get('Host') in (f'127.0.0.1:{port}', f'localhost:{port}')
+        def job_request(self):
+            """Rejects anything but a same-origin request from this launch's page; True when allowed."""
+            port = self.server.server_port
+            origin = self.headers.get('Origin')
+            allowed = (jobs is not None and self.loopback_host()
+                       and origin in (None, f'http://127.0.0.1:{port}', f'http://localhost:{port}')
+                       and self.headers.get('Sec-Fetch-Site', 'same-origin') == 'same-origin'
+                       and hmac.compare_digest(self.headers.get('X-Training-Token', ''), token or ''))
+            if not allowed:
+                self.reply(403 if jobs is not None else 404, {'error': 'Forbidden'})
+            return allowed
+        def job_error(self, error):
+            self.reply(error.status, {'error': str(error), **error.extra})
         def do_GET(self):
-            path = urlsplit(self.path).path
+            if not self.loopback_host():
+                self.send_error(403); return
+            url = urlsplit(self.path)
+            path = url.path
+            if path == '/api/jobs' or path.startswith('/api/jobs/'):
+                if not self.job_request(): return
+                parts = path.split('/')
+                try:
+                    if len(parts) == 3:
+                        self.reply(200, jobs.list())
+                    elif len(parts) == 5 and parts[4] == 'log':
+                        offset = parse_qs(url.query).get('offset', [None])[0]
+                        self.reply(200, jobs.log(parts[3], int(offset) if offset and offset.isdigit() else None))
+                    else:
+                        self.reply(404, {'error': 'Not found'})
+                except JobError as error:
+                    self.job_error(error)
+                return
             kind = 'application/json'
             data = None
             if path in ('/', '/index.html'):
                 kind = 'text/html'
-                data = html({'initialRun': key}).encode()
+                data = html({'initialRun': key, 'jobToken': token}).encode()
             elif path == '/api/runs':
                 data = json.dumps(catalog.list(), allow_nan=False).encode()
             elif path.startswith('/api/runs/'):
@@ -142,16 +192,32 @@ def serve(output=None, catalog=None, port=0):
                 if path in legacy and (Path(output) / legacy[path]).is_file(): data = (Path(output) / legacy[path]).read_bytes()
             if data is None:
                 self.send_error(404); return
-            self.send_response(200)
-            self.send_header('Content-Type', kind + '; charset=utf-8')
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Length', str(len(data)))
-            self.end_headers()
-            try: self.wfile.write(data)
-            except (BrokenPipeError, ConnectionResetError): pass
+            self.send(200, data, kind)
+        def do_POST(self):
+            path = urlsplit(self.path).path
+            parts = path.split('/')
+            if not (path == '/api/jobs' or (len(parts) == 5 and parts[:3] == ['', 'api', 'jobs'] and parts[4] == 'cancel')):
+                self.send_error(404); return
+            if not self.job_request(): return
+            # A cross-origin form cannot send this type without a CORS preflight, which is never answered.
+            if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json':
+                self.reply(415, {'error': 'Send application/json'}); return
+            length = self.headers.get('Content-Length', '')
+            if not length.isdigit() or int(length) > 65536:
+                self.reply(413 if length.isdigit() else 411, {'error': 'Send a JSON body of at most 64 KiB'}); return
+            try:
+                body = json.loads(self.rfile.read(int(length)) or b'{}')
+                if path == '/api/jobs':
+                    self.reply(201, jobs.start(body))
+                else:
+                    self.reply(200, jobs.cancel(parts[3]))
+            except ValueError:
+                self.reply(400, {'error': 'Body is not JSON'})
+            except JobError as error:
+                self.job_error(error)
         def log_message(self, *args): pass
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    server.jobs = jobs
     Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -165,13 +231,15 @@ def main():
     args = ap.parse_args()
     catalog = Catalog(args.catalog)
     catalog.discover(local_data_roots() + args.import_root)
-    server = serve(args.run, catalog, args.port)
+    server = serve(args.run, catalog, args.port, JobRunner(catalog))
     print(f'Training workspace: http://127.0.0.1:{server.server_port}', flush=True)
     try:
         while True: time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
+        # A job belongs to this launch: interrupt it rather than leave it unrecorded.
+        server.jobs.stop()
         server.shutdown(); server.server_close()
 
 

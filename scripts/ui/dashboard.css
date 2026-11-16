@@ -1078,3 +1078,73 @@ body.task-view .sleep-only {
 .task-view-panels .scorecard strong {
   overflow-wrap: anywhere;
 }
+.actions-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+#job-indicator {
+  overflow-wrap: anywhere;
+}
+.actions-dialog {
+  max-width: 900px;
+}
+.actions-dialog h3 {
+  font-size: 13px;
+  margin: 18px 0 8px;
+}
+.job-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+.job-field {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.actions-dialog .job-field input,
+.actions-dialog .job-field select,
+.actions-dialog .job-field textarea {
+  width: 100%;
+}
+textarea {
+  font: inherit;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 7px;
+  min-height: 60px;
+  resize: vertical;
+}
+.job-submit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.job-command {
+  display: block;
+  overflow-x: auto;
+  white-space: pre;
+  font-size: 11px;
+  color: var(--muted);
+}
+#job-log {
+  max-height: 320px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 10px;
+  margin-top: 12px;
+}
+#job-table button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+#job-table tr[aria-current='true'] td {
+  color: var(--accent);
+}
