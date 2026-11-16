@@ -62,6 +62,11 @@ Paths are absolute or relative to the working directory; `plan` records them abs
   - A replayed profile is named either by `engine` and `profile` hashes, or by `config`
     (`defaults`, or a profile JSON in any shape core's `replay --config` accepts). A
     `config` is matched to cached replays of the same overrides.
+  - A replayed night is used only when core's training gate passed it (`replay
+    --compare-stored`). `"allowUngated": true` also accepts nights the gate could not judge,
+    the normal case when the stored rows ran a different profile. A failed night is never
+    used. Plan excludes every rejected night, with core's reason, for every candidate. The
+    gate's thresholds are core's and rest on two nights so far.
 - **movementModel.** `none`, or a `movement_model.py train` model with one or more
   `movement_model.py epochs` outputs (cross-fitted, `movement-epochs-v2`).
   `"dropUncovered": true` excludes sessions without raw exports instead of blocking the
@@ -132,6 +137,11 @@ E2 comparison:
   live rows;
 - the same nights: those with raw, so about 24.
 
+`allowUngated` is `true`. Most of these nights stored vitals under a profile other than the
+replayed one, and core's gate cannot judge such nights. Those nights are exactly what E2 is
+asking about. Nights that ran the replayed profile are still judged, and a failed one is
+excluded from both candidates.
+
 When C2 has pinned the left side's profile, replace `defaults` with that profile's JSON
 before the first run; the spec must not change after it. Running it waits for core's
 `replay --archive` and a populated archive (A1). Replace `POD_ID` with the archive
@@ -147,7 +157,7 @@ uv run --locked python scripts/search.py plan docs/search/e2-replayed-vs-live.js
   --timezone America/Los_Angeles --config defaults --compare-stored --export 2026-10-18=<…>/session-1184.tar.gz \
   --export 2026-10-19=<…>/session-1194.tar.gz <training>/data/replays/e2-replayed-vs-live-replayed)
 uv run --locked python scripts/derive_snapshot.py ingest data/replays/e2-replayed-vs-live-replayed
-# 3. plan again (nights failing core's parity gate or without RAW are listed as excluded), run, report
+# 3. plan again (nights core's training gate failed, or without RAW, are listed as excluded), run, report
 uv run --locked python scripts/search.py plan docs/search/e2-replayed-vs-live.json --out data/runs/e2-20261201
 uv run --locked python scripts/search.py run data/runs/e2-20261201 --jobs 2
 uv run --locked python scripts/search.py report data/runs/e2-20261201

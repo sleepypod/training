@@ -17,7 +17,7 @@
   "space": {
     "vitals": [
       { "id": "live", "profile": "live" },
-      { "id": "replayed", "config": "defaults" }
+      { "id": "replayed", "config": "defaults", "allowUngated": true }
     ],
     "movementModel": ["none"],
     "stage": [{ "id": "podContext", "contract": "podContext", "model": "balanced_leaf5" }]

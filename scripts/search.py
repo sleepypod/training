@@ -126,9 +126,11 @@ def expand(spec):
         elif v.get('engine') and v.get('profile') and 'config' not in v:
             if not (ms.SHA256.match(v['engine']) and ms.SHA256.match(v['profile'])):
                 raise ValueError('vitals engine and profile are lowercase SHA-256 hashes')
-            vitals.append(dict(id=choice_id(v, v['profile'][:12]), kind='replayed', engine=v['engine'], profile=v['profile']))
+            vitals.append(dict(id=choice_id(v, v['profile'][:12]), kind='replayed', engine=v['engine'], profile=v['profile'],
+                               allowUngated=bool(v.get('allowUngated'))))
         elif 'config' in v:
-            vitals.append(dict(id=choice_id(v, Path(v['config']).stem), kind='replayed', config=v['config'], engine=v.get('engine')))
+            vitals.append(dict(id=choice_id(v, Path(v['config']).stem), kind='replayed', config=v['config'], engine=v.get('engine'),
+                               allowUngated=bool(v.get('allowUngated'))))
         else:
             raise ValueError(f'vitals choice {v}: give profile "live", engine and profile hashes, or a config file ({kinds})')
     movement = []
@@ -245,15 +247,15 @@ def covers(entry, night):
     return entry['group'] == night['group'] and all(r['start'] in starts for r in night['rows'])
 
 
-def replayed_snapshot(source, engine, profile, side, timezone, nights, cache):
+def replayed_snapshot(source, engine, profile, side, timezone, nights, cache, allow_ungated):
     """A derived snapshot for these replayed nights, built once under data/cache/snapshots/."""
     vcache = Path(cache) / 'vitals'
     entries = sorted((n, ds.cached(vcache, n, engine, profile)[1]['readingsSha256']) for n in nights)
     key = key_of(dict(source=sha256(source), engine=engine, profile=profile, side=side, timezone=timezone, nights=entries,
-                      script=sha256(ds.__file__)))
+                      allowUngated=allow_ungated, script=sha256(ds.__file__)))
     out = Path(cache) / 'snapshots' / key[:24] / 'biometrics.db'
     if not out.exists():
-        ds.derive(source, out, engine, profile, side, timezone, [n for n, _ in entries], vcache)
+        ds.derive(source, out, engine, profile, side, timezone, [n for n, _ in entries], vcache, allow_ungated)
     return out
 
 
@@ -318,10 +320,14 @@ def plan(spec_path, out, cache=None):
         for n in sessions:
             hit = engine and profile and ds.cached(vcache, n['night'], engine, profile)
             reason = engine and profile and ds.skipped(vcache, n['night'], engine, profile)
-            if hit and hit[1].get('parity') != 'fail':
+            if hit:
+                # core's training gate decides; a night it rejects keeps live rows, so no candidate may score it.
+                use, verdict, why = ds.training_gate(hit[1].get('parity'), v['allowUngated'])
+                if not use:
+                    exclude(n, f"vitals {v['id']}: {why}")
                 continue
-            if hit or reason:
-                exclude(n, f"vitals {v['id']}: " + ('replay failed the stored-row parity gate' if hit else reason))
+            if reason:
+                exclude(n, f"vitals {v['id']}: {reason}")
             elif n['group'] in development:
                 missing.append(n['night'])
             else:
@@ -329,7 +335,7 @@ def plan(spec_path, out, cache=None):
         if missing or not profile:
             blocked.append(f"vitals {v['id']}: no cached replay for {len(set(missing)) or 'any'} development nights")
             commands.extend(replay_command(spec, {**v, 'profile': profile}, set(missing)))
-        resolved[v['id']] = dict(kind='replayed', engine=engine, profile=profile, config=v.get('config'))
+        resolved[v['id']] = dict(kind='replayed', engine=engine, profile=profile, config=v.get('config'), allowUngated=v['allowUngated'])
     movement = {}
     for m in choices['movementModel']:
         if m['id'] == 'none':
@@ -367,7 +373,8 @@ def plan(spec_path, out, cache=None):
             r = resolved[v['id']]
             if r['kind'] == 'replayed':
                 nights = sorted({n['night'] for n in kept})
-                r['snapshot'] = str(replayed_snapshot(snapshot, r['engine'], r['profile'], side, tz, nights, cache))
+                r['snapshot'] = str(replayed_snapshot(snapshot, r['engine'], r['profile'], side, tz, nights, cache, r['allowUngated']))
+                r['gate'] = {n: ds.training_gate(ds.cached(vcache, n, r['engine'], r['profile'])[1].get('parity'), r['allowUngated'])[1] for n in nights}
                 r['snapshotSha256'] = sha256(r['snapshot'])
                 r['readingsSha256'] = {n: ds.cached(vcache, n, r['engine'], r['profile'])[1]['readingsSha256'] for n in nights}
             for c in contracts:

@@ -26,7 +26,7 @@ class SpecTests(unittest.TestCase):
         self.assertEqual([c['id'] for c in candidates], ['live+none+podContext', 'live+none+quality-wakeFirst',
                                                          'replayed+none+podContext', 'replayed+none+quality-wakeFirst'])
         self.assertEqual(choices['stage'][1]['groups'], ['context', 'movement', 'arousal', 'quality'])
-        self.assertEqual(choices['vitals'][1], dict(id='replayed', kind='replayed', config='defaults', engine=None))
+        self.assertEqual(choices['vitals'][1], dict(id='replayed', kind='replayed', config='defaults', engine=None, allowUngated=False))
 
     def test_refuses_unnamed_primaries_budgets_and_duplicate_columns(self):
         with self.assertRaisesRegex(ValueError, 'primary'):
