@@ -27,7 +27,7 @@ def read_json(path, default=None):
 
 
 # Research runs that are not sleep-stage training write report.json with one of these kinds.
-TASK_KINDS = {'movement': 'movement', 'snore-session': 'snore', 'snore-night': 'snore', 'snore-labels': 'snore'}
+TASK_KINDS = {'movement': 'movement', 'snore-session': 'snore', 'snore-night': 'snore', 'snore-labels': 'snore', 'search': 'search'}
 
 
 def run_kind(path):
@@ -153,6 +153,9 @@ def task_entry(key, root, kind, added):
         summary = 'Phone labels · exit test ' + report.get('exitTest', {}).get('result', 'inconclusive')
     elif kind == 'snore-session':
         summary = 'Bandwidth gate · ' + str(report.get('outcome', '—'))
+    elif kind == 'search':
+        # Development scores only; locked-holdout scores stay in final.json, out of every view.
+        summary = f"Search · {report.get('candidates', '—')} candidates · {report.get('status', '—')}"
     else:
         coverage = report.get('coverage')
         summary = 'Night · ' + (f'{coverage:.0%} coverage' if coverage is not None else 'coverage —')

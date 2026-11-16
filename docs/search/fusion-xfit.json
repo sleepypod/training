@@ -1,0 +1,30 @@
+{
+  "name": "fusion-xfit-reproduction",
+  "side": "left",
+  "timezone": "America/Los_Angeles",
+  "inputs": {
+    "snapshot": "data/runs/export-20261114/biometrics.db",
+    "watch": "data/runs/export-20261114/watch.json",
+    "features": { "podNative": "data/runs/export-20261114/features.json" }
+  },
+  "primary": { "candidate": "live+movementRaw-v1+all_quality", "baseline": "live+none+all", "metric": "macroF1" },
+  "space": {
+    "vitals": [{ "id": "live", "profile": "live" }],
+    "movementModel": [
+      "none",
+      {
+        "id": "movementRaw-v1",
+        "model": "data/runs/movement-model-20261115-xfit/model.joblib",
+        "epochs": ["data/runs/movement-model-20261115-xfit/movement-epochs.json"],
+        "dropUncovered": true
+      }
+    ],
+    "stage": [
+      { "id": "base", "contract": "podNative" },
+      { "id": "all", "contract": "podNative", "groups": ["context", "movement", "arousal"] },
+      { "id": "all_quality", "contract": "podNative", "groups": ["context", "movement", "arousal", "quality"] },
+      { "id": "hierarchical_quality", "contract": "podNative", "groups": ["context", "movement", "arousal", "quality"], "model": "hierarchical" }
+    ]
+  },
+  "budget": { "maxCandidates": 8 }
+}

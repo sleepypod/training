@@ -200,6 +200,7 @@ test('runs map to sleep, movement or snore tasks; unknown kinds stay sleep', () 
   assert.equal(runTask({ kind: 'snore-session' }), 'snore');
   assert.equal(runTask({ kind: 'snore-night' }), 'snore');
   assert.equal(runTask({ kind: 'mystery' }), 'sleep');
+  assert.equal(runTask({ kind: 'search' }), 'search');
   assert.equal(runTask(null), 'sleep');
   assert.deepEqual(plain(Object.values(taskOf)), [
     'sleep',
@@ -207,6 +208,7 @@ test('runs map to sleep, movement or snore tasks; unknown kinds stay sleep', () 
     'snore',
     'snore',
     'snore',
+    'search',
   ]);
 });
 test('movement rows compare the pod score and classifier, including per-class rates', () => {
