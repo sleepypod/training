@@ -277,6 +277,10 @@ class NoPodWritesTests(unittest.TestCase):
                'scripts/movement_model.py'}
     WRITES = re.compile(r'sleep-stages/model|watch-upload|/api/device|/api/settings|/api/schedules|'
                         r"method\s*=\s*['\"](PUT|POST|PATCH|DELETE)|['\"]-X['\"]|--request", re.I)
+    # Reads: GETs of the model library and selection, and the preview route Pod.post is limited to.
+    READS = re.compile(r"pod\.get\('sleep-stages/models?'|sleep-stages/model/preview")
+    # fetch_pod.Pod.post sends POST only to fetch_pod.READ_ONLY_POSTS (test_pod_post_refuses_writes).
+    GUARDED_POST = "method='POST')"
 
     def test_action_allow_list_is_fixed(self):
         self.assertEqual(set(ACTIONS), {'train', 'stage-backtest', 'fusion', 'vitals-reference', 'movement-model-train',
@@ -291,8 +295,19 @@ class NoPodWritesTests(unittest.TestCase):
 
     def test_action_scripts_never_write_to_the_pod(self):
         for path in self.SCRIPTS | {'scripts/fetch_pod.py', 'scripts/retrain-models.py', 'scripts/web_jobs.py'}:
-            matches = [m.group(0) for m in self.WRITES.finditer((ROOT / path).read_text())]
+            text = self.READS.sub('', (ROOT / path).read_text())
+            if path == 'scripts/fetch_pod.py':
+                text = text.replace(self.GUARDED_POST, ')', 1)
+            matches = [m.group(0) for m in self.WRITES.finditer(text)]
             self.assertEqual(matches, [], path)
+
+    def test_pod_post_refuses_writes(self):
+        import fetch_pod
+        self.assertEqual(fetch_pod.READ_ONLY_POSTS, frozenset({'sleep-stages/model/preview'}))
+        pod = fetch_pod.Pod.__new__(fetch_pod.Pod)
+        for route in ('sleep-stages/models', 'sleep-stages/model', 'biometrics/watch-upload', 'device/temperature'):
+            with self.assertRaises(ValueError):
+                pod.post(route, {})
 
 
 if __name__ == '__main__': unittest.main()
