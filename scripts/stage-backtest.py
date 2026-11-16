@@ -35,6 +35,7 @@ fa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fa)
 rm, pm = fa.rm, fa.pm
 from fetch_pod import Pod, millis
+from canonical_json import canonical_json, stage_sha256 as model_sha256
 import holdout as ho
 from run_history import primary_root
 
@@ -123,42 +124,6 @@ def run(kind, nights, features, extras, ruleset, rng):
     comparisons = {f'{a} vs {b}': {m: compare(per_night, a, b, m, rng) for m in ('macroF1', 'lightF1', 'deepF1', 'remF1')}
                    for a, b in (('all', 'base'), ('hierarchical_all', 'base'), ('hierarchical_all', POD), ('base', POD))}
     return dict(nights=per_night, pooled=summary, comparisons=comparisons)
-
-
-def canonical_json(value):
-    """Core's finite-binary64-json-v1 (modules/common/biometrics/config.py canonical_json): keys sorted
-    by UTF-16, no whitespace, each number as its exact decimal expansion, so Python and JS agree."""
-    def visit(item):
-        if item is None:
-            return 'null'
-        if isinstance(item, bool):
-            return 'true' if item else 'false'
-        if isinstance(item, (int, float)):
-            number = float(item)
-            if not math.isfinite(number):
-                raise ValueError('Non-finite JSON number')
-            if number == 0:
-                return '0'
-            numerator, denominator = abs(number).as_integer_ratio()
-            places = denominator.bit_length() - 1
-            digits = str(numerator * 5 ** places)
-            if places:
-                digits = digits.zfill(places + 1)
-                digits = (digits[:-places] + '.' + digits[-places:]).rstrip('0').rstrip('.')
-            return ('-' if number < 0 else '') + digits
-        if isinstance(item, str):
-            return json.dumps(item, ensure_ascii=False, separators=(',', ':'))
-        if isinstance(item, list):
-            return '[' + ','.join(visit(child) for child in item) + ']'
-        if isinstance(item, dict):
-            return '{' + ','.join(visit(key) + ':' + visit(item[key]) for key in sorted(item, key=lambda key: key.encode('utf-16-be'))) + '}'
-        raise ValueError('Expected finite JSON data')
-    return visit(value)
-
-
-def model_sha256(model):
-    """Core's stageModelSha256: SHA-256 of the model as the pod stores it (epochSeconds defaults to 300)."""
-    return hashlib.sha256(canonical_json({'epochSeconds': 300, **model}).encode('utf-8')).hexdigest()
 
 
 def watch_stages(snapshot, side):

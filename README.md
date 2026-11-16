@@ -493,6 +493,47 @@ uv run --locked python scripts/movement_model.py epochs data/runs/RUN/train/feat
   --archive data/archive/<podId> --out data/runs/RUN/movement-epochs.json
 ```
 
+## Replayed vitals and model sets
+
+Stage models trained on database rows learn from whatever vitals profile was live each
+night. A derived snapshot replaces those rows with vitals replayed from raw through one
+pinned engine and profile (plan C5). Core does the replay; this repo only copies its
+readings into a database the stage scripts already read.
+
+```sh
+# In a core checkout: replay archived nights with one profile (defaults, or a profile JSON)
+pnpm biometrics:local-fit replay --archive <training>/data/archive/<podId> --nights all --side left \
+  --timezone America/Los_Angeles --config defaults --compare-stored <training>/data/replays/defaults
+# Here: cache the readings, then derive a snapshot from them
+uv run --locked python scripts/derive_snapshot.py derive data/archive/<podId>/biometrics.db \
+  --replay data/replays/defaults --out data/derived/defaults/biometrics.db
+npm run features -- data/derived/defaults/biometrics.db data/watch.json data/runs/replayed/features.json left America/Los_Angeles podContext
+```
+
+`derive` copies the database and, for each replayed night and side, replaces the `vitals`
+and `vitals_quality` rows inside the night's in-bed window with the replay's readings; the
+other side and every other table are unchanged. The `derived_snapshot` table records each
+night's source database SHA-256, engine (biometrics manifest hash), profile (resolved config
+hash), readings SHA-256 and `replay.json` SHA-256. Readings are cached once per
+(night, engine, profile) in `data/cache/vitals/<night>-<engine12>-<profile12>.json`; `derive
+--engine E --profile P --side left --timezone TZ` rebuilds from the cache alone, and a night
+whose sleep records changed since its replay is refused.
+
+Replayed readings replace a night's rows only when core's training gate passed that night.
+The gate comes from `replay --compare-stored`, in `nights[].parity.trainingGate`, and it
+judges level, scatter and coverage against the stored rows, only on nights whose rows ran
+the replayed profile. `--allow-ungated` also accepts nights the gate could not judge
+(`not_gated_*`, `no_heart_rate_to_compare`, or a replay without `--compare-stored`). That
+is the normal case when replaying a profile other than the one stored. A failed night is
+never used. Every other night keeps its stored rows. Each night's verdict, core's check
+values and the reason are recorded in `derived_snapshot`. The thresholds are core's and rest
+on two real nights so far, so treat a pass as a coarse check, not proof of parity.
+
+`scripts/modelset.py` writes `RUN/model/set.json` (`modelset-v1`) next to an exported model:
+the stage model pinned by core's own hash (`modelset.py hash candidate.json`; the canonical JSON
+is ported once, in `scripts/canonical_json.py`, and pinned to vectors core computed), the vitals engine and profile it
+expects, and a movement model when one is used. `training.inputs` is `replayed` or `live`.
+
 ## Save and reuse a model
 
 Every successful run automatically saves `model/candidate.json` (portable pod
@@ -602,6 +643,13 @@ uv run --locked python scripts/make-synthetic-inputs.py data/smoke-inputs
 uv run --locked python scripts/train.py \
   --snapshot data/smoke-inputs/biometrics.db --watch-export data/smoke-inputs/export.zip \
   --side left --timezone UTC --out data/smoke-run
+uv run --locked python scripts/make-synthetic-inputs.py data/smoke-graph --nights 12 --replay data/smoke-graph/replay
+uv run --locked python scripts/derive_snapshot.py derive data/smoke-graph/biometrics.db --replay data/smoke-graph/replay \
+  --cache data/smoke-graph/cache --out data/smoke-graph/derived/biometrics.db
+uv run --locked python scripts/parse-watch-export.py data/smoke-graph/export.zip data/smoke-graph/watch.json
+npm run features -- data/smoke-graph/derived/biometrics.db data/smoke-graph/watch.json data/smoke-graph/features.json left UTC podContext
+uv run --locked python scripts/stage-backtest.py data/smoke-graph/features.json \
+  --snapshot data/smoke-graph/derived/biometrics.db --out data/smoke-graph/backtest
 ```
 
 To also exercise pod fetching against a synthetic local HTTP server:

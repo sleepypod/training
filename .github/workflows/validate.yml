@@ -29,3 +29,17 @@ jobs:
       - run: >-
           uv run --locked python scripts/smoke-pod.py
           data/smoke-inputs data/smoke-run/features.json data/pod-smoke-run
+      - run: >-
+          uv run --locked python scripts/make-synthetic-inputs.py data/smoke-graph
+          --nights 12 --replay data/smoke-graph/replay
+      - run: >-
+          uv run --locked python scripts/derive_snapshot.py derive data/smoke-graph/biometrics.db
+          --replay data/smoke-graph/replay --cache data/smoke-graph/cache
+          --out data/smoke-graph/derived/biometrics.db
+      - run: uv run --locked python scripts/parse-watch-export.py data/smoke-graph/export.zip data/smoke-graph/watch.json
+      - run: >-
+          npm run features -- data/smoke-graph/derived/biometrics.db data/smoke-graph/watch.json
+          data/smoke-graph/features.json left UTC podContext
+      - run: >-
+          uv run --locked python scripts/stage-backtest.py data/smoke-graph/features.json
+          --snapshot data/smoke-graph/derived/biometrics.db --out data/smoke-graph/backtest
