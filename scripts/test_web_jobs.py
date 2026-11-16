@@ -297,7 +297,7 @@ class NoPodWritesTests(unittest.TestCase):
                'scripts/movement_model.py', 'scripts/archive_index.py'}
     WRITES = re.compile(r'sleep-stages/model|watch-upload|/api/device|/api/settings|/api/schedules|'
                         r"method\s*=\s*['\"](PUT|POST|PATCH|DELETE)|['\"]-X['\"]|--request", re.I)
-    # Reads: GETs of the model library and selection, and the preview route Pod.post is limited to.
+    # Reads: GETs of the model library and selection (archive_index.py --stage-models help), and the preview route Pod.post is limited to.
     READS = re.compile(r"pod\.get\('sleep-stages/models?'|sleep-stages/model/preview|GET /api/sleep-stages/models\?side=")
     # fetch_pod.Pod.post sends POST only to fetch_pod.READ_ONLY_POSTS (test_pod_post_refuses_writes).
     GUARDED_POST = "method='POST')"
