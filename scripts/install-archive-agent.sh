@@ -5,6 +5,7 @@
 #   scripts/install-archive-agent.sh --dry-run     # print the plist, change nothing
 #   scripts/install-archive-agent.sh               # write and load the agent
 #   scripts/install-archive-agent.sh --uninstall   # unload and remove it
+#   scripts/install-archive-agent.sh --print-command  # the pull it runs, for the dashboard
 #
 # The pull is read-only toward the pod. The pod comes from data/workspace-settings.json
 # `pod`; the core checkout from its `coreCheckout` key, else ../sleepypod-core next to
@@ -15,6 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.sleepypod.training-archive"
 DRY_RUN=0
 UNINSTALL=0
+PRINT=0
 POD=""
 CORE=""
 SETTINGS=""
@@ -31,6 +33,7 @@ Options:
   --dest DIR          archive destination (default: <primary checkout>/data/archive)
   --dry-run           print the plist instead of installing it
   --uninstall         unload and delete the agent
+  --print-command     print the pull's working directory, PATH and argv, NUL-separated, and exit
 EOF
 }
 
@@ -44,6 +47,7 @@ while [ $# -gt 0 ]; do
     --dest) DEST="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --print-command) PRINT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "unknown option: $1" ;;
   esac
@@ -78,7 +82,7 @@ POD="${POD:-$(setting pod)}"
 CORE="${CORE:-$(setting coreCheckout)}"
 CORE="${CORE:-$(dirname "$PRIMARY")/sleepypod-core}"
 [ -n "$POD" ] || die "no pod: set \"pod\" in $SETTINGS or pass --pod"
-[[ "$POD" =~ ^[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || die "pod must be HOST or HOST:PORT, got $POD"
+[[ "$POD" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$ ]] || die "pod must be HOST or HOST:PORT, got $POD"
 [ -d "$CORE" ] || die "core checkout $CORE not found: set \"coreCheckout\" in $SETTINGS or pass --core"
 CORE="$(cd "$CORE" && pwd)"
 
@@ -112,7 +116,15 @@ AGENT_PATH="$AGENT_PATH:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin
 squote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 xml() { local s="${1//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
 
+PULL=(pnpm -s biometrics:archive pull --pod "$POD" --dest "$DEST" --curl)
+if [ "$PRINT" = 1 ]; then
+  # The dashboard's one-click and on-open pulls run exactly this, so both share the resolution above.
+  printf '%s\0' "$CORE" "$AGENT_PATH" "${PULL[@]}"
+  exit 0
+fi
+
 LOG="$DEST/pull.log"
+# Same pull as PULL above; test_web_jobs.py checks the two agree.
 COMMAND="echo \"--- \$(date -u +%Y-%m-%dT%H:%M:%SZ)\"; cd $(squote "$CORE") && pnpm -s biometrics:archive pull --pod $(squote "$POD") --dest $(squote "$DEST") --curl"
 
 plist() {

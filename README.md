@@ -148,7 +148,7 @@ to have passed parity.
 workspace: `train.py --snapshot`, `stage-backtest.py`, `fusion.py`,
 `vitals_reference.py`, `movement_model.py train` and `epochs`, and the archive pull
 that `scripts/install-archive-agent.sh` schedules (core's read-only
-`biometrics:archive pull`, with the pod and core checkout from
+`biometrics:archive pull`, resolved by that script's `--print-command` from
 `data/workspace-settings.json`). One job runs at a time; starting another while one
 runs is refused (HTTP 409) rather than queued, so a job never starts on inputs that
 changed after it was requested. Each job writes `data/web-jobs/<id>/command.json`
@@ -438,6 +438,9 @@ scripts/install-archive-agent.sh --dry-run
 scripts/install-archive-agent.sh              # logs to data/archive/pull.log
 scripts/install-archive-agent.sh --uninstall
 ```
+
+`scripts/install-archive-agent.sh --print-command` prints the same pull (working directory,
+`PATH`, argv) without installing anything; the training workspace's archive pull runs it.
 
 Then index the archive by night. The index reads local files only:
 
