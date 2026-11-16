@@ -14,17 +14,19 @@ import re
 import secrets
 import shlex
 import signal
+import socket
 import subprocess
 from threading import Lock, Thread, Timer
 import time
 from zoneinfo import ZoneInfo
 
-from run_history import ROOT, primary_root, read_json, run_kind
+from run_history import ROOT, alive, primary_root, run_kind
 
 JOB_ID = re.compile(r'\d{8}T\d{6}Z-[0-9a-f]{6}')
-POD = re.compile(r'[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?')
 SESSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}')
 TIMEZONE = re.compile(r'[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}')
+AGENT = ROOT / 'scripts/install-archive-agent.sh'
+LOCK_FILE = '.biometrics-archive.lock'
 LOG_TAIL = 64 * 1024
 LOG_CHUNK = 256 * 1024
 
@@ -33,6 +35,34 @@ class JobError(Exception):
     def __init__(self, status, message, **extra):
         super().__init__(message)
         self.status, self.extra = status, extra
+
+
+def archive_pull_command(data):
+    """argv, cwd and PATH of the pull scripts/install-archive-agent.sh schedules (plan A1/B3), resolved by that script."""
+    try:
+        done = subprocess.run(['bash', str(AGENT), '--print-command', '--settings', str(data / 'workspace-settings.json'),
+                               '--dest', str(data / 'archive')], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise JobError(400, f'Could not resolve the archive pull: {error}') from None
+    if done.returncode:
+        message = (done.stderr.strip().splitlines() or ['the archive pull is not configured'])[-1]
+        raise JobError(400, message.removeprefix('install-archive-agent: '))
+    cwd, path, *argv = done.stdout.split('\0')[:-1]
+    return argv, Path(cwd), {'PATH': path}
+
+
+def archive_lock(dest):
+    """Holder of core's pull lock in dest, else None. As in core, a lock left by a dead process on this host is free."""
+    try:
+        holder = json.loads((Path(dest) / LOCK_FILE).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+    holder = holder if isinstance(holder, dict) else {}
+    if holder.get('host') == socket.gethostname() and isinstance(holder.get('pid'), int) and not alive(holder['pid']):
+        return None
+    return holder
 
 
 def field(name, kind, label, flag=None, **spec):
@@ -108,29 +138,17 @@ ACTIONS = {
     'archive-pull': {
         'label': 'Pull the pod archive now',
         'description': 'Core’s read-only biometrics archive pull into data/archive, the command the nightly agent from scripts/install-archive-agent.sh runs. Pod and core checkout come from data/workspace-settings.json.',
-        'fields': [],
+        'build': archive_pull_command, 'output': lambda data: data / 'archive', 'fields': [],
+    },
+    'archive-index': {
+        'label': 'Rebuild the archive night index',
+        'description': 'scripts/archive_index.py: one row per archived night with raw coverage, Watch teachers, lineage, locked nights and pruning risk, written to the archive’s index.json. Reads local files only.',
+        'argv': script('scripts/archive_index.py'),
+        'fields': [field('archive', 'dir', 'Pod archive', '--archive', placeholder='data/archive/<podId>', required=True),
+                   field('timezone', 'timezone', 'Timezone', '--timezone', placeholder='America/Los_Angeles', required=True),
+                   field('storage', 'file', 'Saved /api/system/storage', '--storage', placeholder='data/storage.json')],
     },
 }
-
-
-def archive_pull_command(data):
-    """argv and cwd of core's archive pull, as scheduled by scripts/install-archive-agent.sh (plan A1/B3)."""
-    settings_path = data / 'workspace-settings.json'
-    settings = read_json(settings_path, {})
-    settings = settings if isinstance(settings, dict) else {}
-    pod = settings.get('pod')
-    if not isinstance(pod, str) or not POD.fullmatch(pod):
-        raise JobError(400, f'Set "pod" (HOST or HOST:PORT) in {settings_path}')
-    core = settings.get('coreCheckout')
-    core = Path(core).expanduser() if isinstance(core, str) and core else data.parent.parent / 'sleepypod-core'
-    if not (read_json(core / 'package.json', {}) or {}).get('scripts', {}).get('biometrics:archive'):
-        raise JobError(400, f'{core} has no biometrics:archive script; set "coreCheckout" in {settings_path}')
-    try:
-        if '--curl' not in (core / 'scripts/biometrics-archive/cli.ts').read_text():
-            raise OSError
-    except OSError:
-        raise JobError(400, f'{core}’s archiver has no --curl option; update the checkout') from None
-    return ['pnpm', '-s', 'biometrics:archive', 'pull', '--pod', pod, '--dest', str(data / 'archive'), '--curl'], core.resolve()
 
 
 def stamp():
@@ -167,6 +185,11 @@ class JobRunner:
             path = self.path(raw, label)
             if not path.is_file():
                 raise JobError(400, f'{label}: {path} is not a file')
+            return str(path)
+        if kind == 'dir':
+            path = self.path(raw, label)
+            if not path.is_dir():
+                raise JobError(400, f'{label}: {path} is not a folder')
             return str(path)
         if kind == 'files':
             items = raw if isinstance(raw, list) else None
@@ -222,7 +245,7 @@ class JobRunner:
         raise JobError(500, f'Unknown field type {kind}')
 
     def command(self, action, params):
-        """Validated (argv, cwd, params, output) for an allow-listed action; raises JobError."""
+        """Validated (argv, cwd, params, output, env) for an allow-listed action; raises JobError."""
         spec = self.actions.get(action) if isinstance(action, str) else None
         if spec is None:
             raise JobError(400, 'Unknown action')
@@ -232,9 +255,9 @@ class JobRunner:
         extra = set(params) - set(known)
         if extra:
             raise JobError(400, 'Unknown parameters: ' + ', '.join(sorted(map(str, extra))))
-        if action == 'archive-pull':
-            argv, cwd = archive_pull_command(self.data)
-            return argv, cwd, {}, str(self.data / 'archive')
+        if 'build' in spec:
+            argv, cwd, env = spec['build'](self.data)
+            return argv, cwd, {}, str(spec['output'](self.data)), env
         for group in spec.get('oneOf', []):
             if sum(params.get(name) not in (None, '') for name in group) != 1:
                 raise JobError(400, 'Give exactly one of: ' + ', '.join(known[name]['label'] for name in group))
@@ -260,7 +283,7 @@ class JobRunner:
                 # --flag=value keeps a value that starts with '-' from being read as an option.
                 argv.append(str(item) if f['flag'] is None else f'{f["flag"]}={item}')
         output = next((values[f['name']] for f in spec['fields'] if f['type'] in ('out-dir', 'out-file')), None)
-        return argv, self.root.resolve(), values, output
+        return argv, self.root.resolve(), values, output, {}
 
     def busy(self):
         if self.active and self.active['process'].poll() is None:
@@ -275,18 +298,19 @@ class JobRunner:
             if running:
                 raise JobError(409, f'Job {running} is still running; one job runs at a time', active=running)
             action = body.get('action')
-            argv, cwd, values, output = self.command(action, body.get('params') or {})
+            argv, cwd, values, output, env = self.command(action, body.get('params') or {})
             key = f'{stamp()}-{secrets.token_hex(3)}'
             folder = self.jobs / key
             folder.mkdir(parents=True)
             record = {'kind': 'web-job', 'id': key, 'action': action, 'label': self.actions[action]['label'],
-                      'params': values, 'argv': argv, 'cwd': str(cwd), 'command': shlex.join(argv), 'output': output,
+                      'params': values, 'argv': argv, 'cwd': str(cwd), 'env': env,
+                      'command': shlex.join([f'{k}={v}' for k, v in env.items()] + argv), 'output': output,
                       'status': 'running', 'createdAt': time.time(), 'startedAt': None, 'finishedAt': None,
                       'exitCode': None, 'pid': None, 'run': None, 'error': None}
             log = (folder / 'log.txt').open('ab')
             try:
                 process = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                           start_new_session=True, env={**os.environ, 'PYTHONUNBUFFERED': '1'})
+                                           start_new_session=True, env={**os.environ, 'PYTHONUNBUFFERED': '1', **env})
             except OSError as error:
                 log.write(f'Could not start {argv[0]}: {error}\n'.encode())
                 record.update(status='failed', error=str(error), finishedAt=time.time())

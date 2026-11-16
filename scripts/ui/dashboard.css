@@ -1148,3 +1148,16 @@ textarea {
 #job-table tr[aria-current='true'] td {
   color: var(--accent);
 }
+body.archive-view #runs-label,
+body.archive-view #run-search,
+body.archive-view #run-filter,
+body.archive-view #run-list,
+body.archive-view .run-switch {
+  display: none;
+}
+.task-switch {
+  flex-wrap: wrap;
+}
+.archive-alert {
+  border-color: #73433a;
+}

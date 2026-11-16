@@ -146,9 +146,9 @@ to have passed parity.
 
 **Actions** (bottom of the sidebar) runs the repository's own scripts from the
 workspace: `train.py --snapshot`, `stage-backtest.py`, `fusion.py`,
-`vitals_reference.py`, `movement_model.py train` and `epochs`, and the archive pull
-that `scripts/install-archive-agent.sh` schedules (core's read-only
-`biometrics:archive pull`, with the pod and core checkout from
+`vitals_reference.py`, `movement_model.py train` and `epochs`, `archive_index.py`, and the
+archive pull that `scripts/install-archive-agent.sh` schedules (core's read-only
+`biometrics:archive pull`, resolved by that script's `--print-command` from
 `data/workspace-settings.json`). One job runs at a time; starting another while one
 runs is refused (HTTP 409) rather than queued, so a job never starts on inputs that
 changed after it was requested. Each job writes `data/web-jobs/<id>/command.json`
@@ -438,6 +438,22 @@ scripts/install-archive-agent.sh --dry-run
 scripts/install-archive-agent.sh              # logs to data/archive/pull.log
 scripts/install-archive-agent.sh --uninstall
 ```
+
+`scripts/install-archive-agent.sh --print-command` prints the same pull (working directory,
+`PATH`, argv) without installing anything; the training workspace's archive pull runs it.
+
+In the training workspace (`scripts/dashboard.py`), **Archive** in the sidebar shows each
+`data/archive/<podId>/index.json`: archived nights, Watch coverage per teacher, vitals
+lineage, locked holdout nights (listed, never scored), nights at risk, and the age of the
+last successful pull (the newest `pulls/*.json`, which core writes only when a pull
+completes). It turns red when that pull is more than 3 days old, which is how a stopped
+nightly agent gets noticed before raw is pruned. **Pull now** and **Rebuild index** start
+the pull and `archive_index.py` as workspace jobs. While the workspace is open it also
+pulls when it starts and every 6 hours, as a job; it skips a round when core's
+`.biometrics-archive.lock` is held by a live pull, waits while another job runs, and never
+makes the first pull, which waits for the other sleeper's consent. `--no-sync` turns this
+off. It only protects nights while the workspace is open; the launchd agent is what keeps
+raw from being pruned unarchived.
 
 Then index the archive by night. The index reads local files only:
 
