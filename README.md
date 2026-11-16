@@ -531,7 +531,7 @@ on two real nights so far, so treat a pass as a coarse check, not proof of parit
 
 `scripts/modelset.py` writes `RUN/model/set.json` (`modelset-v1`) next to an exported model:
 the stage model pinned by core's own hash (`modelset.py hash candidate.json`; the canonical JSON
-is ported from core and pinned to vectors core computed), the vitals engine and profile it
+is ported once, in `scripts/canonical_json.py`, and pinned to vectors core computed), the vitals engine and profile it
 expects, and a movement model when one is used. `training.inputs` is `replayed` or `live`.
 
 ## Save and reuse a model

@@ -4,112 +4,27 @@ Training writes one next to its models as RUN/model/set.json; core stores it wit
 uploaded model. `pinned` nodes must be installed exactly; `expected` nodes (vitals) are
 owned by biometrics tuning and a difference is flagged per night, not refused.
 `nodes.stage.sha256` is core's `stageModelSha256`: SHA-256 of the model, as the pod
-stores it, in core's canonical JSON (finite-binary64-json-v1, ported below exactly from
-src/biometrics/algorithms/canonical-json.ts). Never uploads anything.
+stores it, in core's canonical JSON (canonical_json.py). Never uploads anything.
 
   hash   MODEL.json                 print the stage node sha256 core will compute
   check  SET.json --model MODEL.json
   write  RUN --inputs live|replayed [--engine E --profile P] [--movement-version V --movement-file F]
 """
 import argparse
-from decimal import Decimal
 import hashlib
 import json
-import math
 from pathlib import Path
 import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from canonical_json import stage_sha256
 import holdout
 
 FORMAT = 'modelset-v1'
-CANONICAL = 'finite-binary64-json-v1'
-EPOCH_SECONDS = 300
 MAX_SET_BYTES = 64 * 1024
-CONFIG_LIMITS = dict(max_nodes=20000, max_bytes=math.inf)
-DATA_LIMITS = dict(max_nodes=2000000, max_bytes=32 * 1024 * 1024)
 INPUTS = ('replayed', 'live')
 SHA256 = re.compile(r'^[a-f0-9]{64}$')
-
-
-def number_token(value):
-    """Exact decimal expansion of a finite binary64; integers convert like JSON.parse would."""
-    value = float(value)
-    if not math.isfinite(value):
-        raise ValueError('Non-finite JSON number')
-    if value == 0:
-        return '0'
-    text = format(Decimal(abs(value)), 'f')
-    if '.' in text:
-        text = text.rstrip('0').rstrip('.')
-    return '-' + text if value < 0 else text
-
-
-def utf16_units(text):
-    return len(text) + sum(1 for c in text if ord(c) > 0xFFFF)
-
-
-def canonical_with_limit(value, max_nodes, max_bytes=math.inf):
-    """core canonicalWithLimit: sorted UTF-16 keys, the same node, depth and byte budgets."""
-    state = dict(nodes=0, bytes=0)
-
-    def token(text):
-        state['bytes'] += len(text.encode('utf-8'))
-        if state['bytes'] > max_bytes:
-            raise ValueError('Canonical data byte limit')
-        return text
-
-    def visit(item, depth):
-        state['nodes'] += 1
-        if state['nodes'] > max_nodes or depth > 32:
-            raise ValueError('JSON resource limit')
-        if item is None:
-            return token('null')
-        if isinstance(item, bool):
-            return token('true' if item else 'false')
-        if isinstance(item, (int, float)):
-            try:
-                return token(number_token(item))
-            except OverflowError:
-                raise ValueError('Non-finite JSON number') from None
-        if isinstance(item, str):
-            if utf16_units(item) > 65536 or any(0xD800 <= ord(c) <= 0xDFFF for c in item):
-                raise ValueError('Invalid JSON string')
-            return token(json.dumps(item, ensure_ascii=False))
-        if isinstance(item, (list, tuple)):
-            if len(item) > max_nodes - state['nodes']:
-                raise ValueError('JSON resource limit')
-            token('[' + ',' * max(0, len(item) - 1) + ']')
-            return '[' + ','.join(visit(child, depth + 1) for child in item) + ']'
-        if isinstance(item, dict) and all(isinstance(k, str) for k in item):
-            keys = sorted(item, key=lambda k: k.encode('utf-16-be'))
-            if len(keys) * 2 > max_nodes - state['nodes']:
-                raise ValueError('JSON resource limit')
-            token('{' + ':' * len(keys) + ',' * max(0, len(keys) - 1) + '}')
-            return '{' + ','.join(f'{visit(k, depth + 1)}:{visit(item[k], depth + 1)}' for k in keys) + '}'
-        raise ValueError('Expected finite JSON data')
-
-    return visit(value, 0)
-
-
-def canonical_json(value):
-    return canonical_with_limit(value, **CONFIG_LIMITS)
-
-
-def config_hash(value):
-    """core configHash."""
-    return hashlib.sha256(canonical_json(value).encode('utf-8')).hexdigest()
-
-
-def data_hash(value):
-    """core dataHash: same encoding, the larger budget for models and retained rows."""
-    return hashlib.sha256(canonical_with_limit(value, **DATA_LIMITS).encode('utf-8')).hexdigest()
-
-
-def stage_sha256(model):
-    """core stageModelSha256: the model as the pod stores it (epochSeconds defaults to 300)."""
-    return data_hash({'epochSeconds': EPOCH_SECONDS, **model})
 
 
 def file_sha256(path):

@@ -1,4 +1,4 @@
-"""Model set manifests and the canonical-JSON port, pinned to vectors core computed.
+"""Model set manifests and canonical_json.py, the one canonical-JSON port, pinned to vectors core computed.
 
 The vectors below came from scripts/canonical-vectors.ts run with `pnpm exec tsx` inside
 core checkouts (sleepypod-core-archive fc40624c and core PR #930, stage-model-set, at 1fd2a784);
@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import canonical_json as cj
 import modelset as m
 
 FIXTURES = json.loads(Path(__file__).with_name('canonical-fixtures.json').read_text())
@@ -46,36 +47,36 @@ class CanonicalTests(unittest.TestCase):
     def test_matches_core_vectors(self):
         for i, text in enumerate(FIXTURES['fixtures']):
             value = json.loads(text)
-            self.assertEqual(m.config_hash(value), CORE_HASHES[i], i)
-            self.assertEqual(m.data_hash(value), CORE_HASHES[i], i)
+            self.assertEqual(cj.config_hash(value), CORE_HASHES[i], i)
+            self.assertEqual(cj.data_hash(value), CORE_HASHES[i], i)
             if i in CORE_CANONICAL:
-                self.assertEqual(m.canonical_json(value), CORE_CANONICAL[i])
+                self.assertEqual(cj.canonical_json(value), CORE_CANONICAL[i])
 
     def test_numbers_expand_exactly(self):
-        self.assertEqual(m.number_token(0.1), '0.1000000000000000055511151231257827021181583404541015625')
-        self.assertEqual(m.number_token(-0.0), '0')
-        self.assertEqual(m.number_token(100.0), '100')
-        self.assertEqual(m.number_token(9007199254740993), '9007199254740992')
-        self.assertEqual(m.number_token(1e21), '1000000000000000000000')
+        self.assertEqual(cj.number_token(0.1), '0.1000000000000000055511151231257827021181583404541015625')
+        self.assertEqual(cj.number_token(-0.0), '0')
+        self.assertEqual(cj.number_token(100.0), '100')
+        self.assertEqual(cj.number_token(9007199254740993), '9007199254740992')
+        self.assertEqual(cj.number_token(1e21), '1000000000000000000000')
         with self.assertRaises(ValueError):
-            m.canonical_json([float('nan')])
+            cj.canonical_json([float('nan')])
         with self.assertRaises(ValueError):
-            m.canonical_json([10 ** 400])
+            cj.canonical_json([10 ** 400])
 
     def test_keys_sort_by_utf16_code_units(self):
         # U+1F600 is the surrogate pair D83D DE00, so it sorts before U+FFFF in core.
-        self.assertEqual(m.canonical_json({'￿': 1, '\U0001F600': 2}), '{"\U0001F600":2,"￿":1}')
+        self.assertEqual(cj.canonical_json({'￿': 1, '\U0001F600': 2}), '{"\U0001F600":2,"￿":1}')
 
     def test_limits_match_core(self):
-        m.config_hash(nested(32))
-        for bad in (lambda: m.config_hash(nested(33)), lambda: m.config_hash([0] * 20000),
-                    lambda: m.config_hash(['\ud800']), lambda: m.config_hash(['x' * 65537])):
+        cj.config_hash(nested(32))
+        for bad in (lambda: cj.config_hash(nested(33)), lambda: cj.config_hash([0] * 20000),
+                    lambda: cj.config_hash(['\ud800']), lambda: cj.config_hash(['x' * 65537])):
             with self.assertRaises(ValueError):
                 bad()
-        m.config_hash([0] * 19999)
-        m.config_hash(['x' * 65536])
-        m.data_hash([0] * 20000)
-        self.assertEqual(m.data_hash([{'i': i, 'x': i / 7} for i in range(50000)]), CORE_LARGE_DATA)
+        cj.config_hash([0] * 19999)
+        cj.config_hash(['x' * 65536])
+        cj.data_hash([0] * 20000)
+        self.assertEqual(cj.data_hash([{'i': i, 'x': i / 7} for i in range(50000)]), CORE_LARGE_DATA)
 
     def test_matches_core_golden_forest(self):
         # src/lib/tests/stage-model-set.test.ts in core PR #930: the upload validator's own golden value.
@@ -85,11 +86,11 @@ class CanonicalTests(unittest.TestCase):
                       testVectors=[dict(inputs=dict(hrZ=-1, hrStdZ=0, motionZ=0, nightFraction=0.5), expected=2),
                                    dict(inputs=dict(hrZ=1, hrStdZ=0, motionZ=0, nightFraction=0.5), expected=1)],
                       metrics=dict(kappa=0.1, note='\u00e9'))
-        self.assertEqual(m.stage_sha256(forest), '6fe42238f142207ca4016e4fe243a439e63e362043938fa15d4f09bdcf2c7906')
+        self.assertEqual(cj.stage_sha256(forest), '6fe42238f142207ca4016e4fe243a439e63e362043938fa15d4f09bdcf2c7906')
 
     def test_stage_hash_is_the_stored_model(self):
-        self.assertEqual(m.stage_sha256(model()), CORE_STAGE)
-        self.assertEqual(m.stage_sha256({**model(), 'epochSeconds': 300}), CORE_STAGE)
+        self.assertEqual(cj.stage_sha256(model()), CORE_STAGE)
+        self.assertEqual(cj.stage_sha256({**model(), 'epochSeconds': 300}), CORE_STAGE)
 
 
 class ModelSetTests(unittest.TestCase):

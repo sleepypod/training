@@ -10,42 +10,22 @@ evaluator reproduces sklearn's predict_proba on every training window, as given 
 with the pod score missing. See knowledge/data/movement-raw-v1.md.
 """
 from datetime import datetime, timezone
-from decimal import Decimal
 import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from canonical_json import canonical
 
 FORMAT = 'movement-model-v1'
 CONTRACT = 'movementRaw-v1'
 TOLERANCE = 1e-9
 MAX_VECTORS = 64
 STILL = 'still'
-
-
-def canonical(value):
-    """core's finite-binary64-json-v1 (src/biometrics/algorithms/canonical-json.ts): sorted keys and the exact
-    decimal expansion of every number, so Python and JavaScript hash the same bytes."""
-    if value is None:
-        return 'null'
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if isinstance(value, (int, float)):
-        if not math.isfinite(value):
-            raise ValueError('Non-finite JSON number')
-        if value == 0:
-            return '0'
-        token = format(Decimal(value), 'f')
-        return token.rstrip('0').rstrip('.') if '.' in token else token
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, list):
-        return '[' + ','.join(canonical(v) for v in value) + ']'
-    if isinstance(value, dict):
-        return '{' + ','.join(f'{canonical(k)}:{canonical(value[k])}' for k in sorted(value)) + '}'
-    raise TypeError(f'Not JSON data: {type(value).__name__}')
 
 
 def body_sha256(doc):
