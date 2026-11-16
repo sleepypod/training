@@ -169,4 +169,9 @@ candidates on the same features, snapshot and cross-fitted movement epochs:
 | `base`, `all`, `all_quality` | `live+none+base`, `live+none+all`, `live+none+all_quality` |
 | `all_movemodel`, `fused`, `hierarchical_fused` | `live+movementRaw-v1+all`, `live+movementRaw-v1+all_quality`, `live+movementRaw-v1+hierarchical_quality` |
 
-Their walk-forward pooled macro F1 matches `fusion.py`'s `schedules.walk-forward.pooled`.
+Checked on 2026-11-15 against `fusion-20261115-xfit` (same features, snapshot and
+movement-model hashes). On every arm, and on `pod_live`, the walk-forward pooled macro F1
+matched `fusion.py`'s `schedules.walk-forward.pooled` to four decimals, on the same 1,165
+scored epochs over 24 night groups. The same space widened to 24 candidates (six group
+sets × two models × two movement choices) took a mean of 8 s per candidate and about 1
+minute of wall time on 4 jobs (Apple M4), with vitals cached.
