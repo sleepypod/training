@@ -3442,9 +3442,13 @@ function archiveNights(nights) {
       a.side.localeCompare(b.side),
   );
 }
-function archiveSummary(nights) {
-  const source = (n) => n.raw?.source || '';
+// An old copy of an edited sleep record (supersededBy) is listed but never counted or trained on.
+function archiveSummary(all) {
+  const source = (n) => n.raw?.source || '',
+    nights = all.filter((n) => n.supersededBy == null);
   return {
+    superseded: all.length - nights.length,
+    overlapping: nights.filter((n) => (n.overlaps || []).length).length,
     nights: nights.length,
     archived: nights.filter(
       (n) => source(n) === 'archive' || source(n).startsWith('local-export:'),
@@ -3456,7 +3460,8 @@ function archiveSummary(nights) {
     mixed: nights.filter((n) => n.lineage?.vitals?.mixed).length,
   };
 }
-function teacherCoverage(nights) {
+function teacherCoverage(all) {
+  const nights = all.filter((n) => n.supersededBy == null);
   return teachers.map((t) => {
     const count = (source) =>
       nights.filter((n) => (n.watch?.[t]?.source ?? null) === source).length;
@@ -3465,7 +3470,7 @@ function teacherCoverage(nights) {
 }
 function lineageCounts(nights) {
   const counts = new Map();
-  for (const n of nights) {
+  for (const n of nights.filter((n) => n.supersededBy == null)) {
     const label = vitalsLabel(n.lineage?.vitals);
     counts.set(label, (counts.get(label) || 0) + 1);
   }
@@ -3477,6 +3482,18 @@ function pullAge(hours) {
   return hours < 48
     ? Math.round(hours) + ' h ago'
     : (hours / 24).toFixed(1) + ' days ago';
+}
+function nightNote(night) {
+  return [
+    night.supersededBy != null
+      ? 'superseded by record ' + night.supersededBy
+      : null,
+    (night.overlaps || []).length
+      ? 'overlaps record ' + night.overlaps.join(', ')
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 function rawSource(source) {
   if (!source) return '—';
@@ -3604,7 +3621,8 @@ function renderArchive() {
     card(
       'Nights archived',
       `${sum.archived} / ${sum.nights}`,
-      'raw on this computer',
+      'raw on this computer' +
+        (sum.superseded ? ` · ${sum.superseded} superseded copies` : ''),
     ),
     card('At risk', String(sum.atRisk), 'raw only on the pod, pruned next'),
     card('Lost', String(sum.lost), 'raw pruned before archiving'),
@@ -3708,6 +3726,7 @@ function renderArchive() {
         'Vitals',
         'Holdout',
         'Risk',
+        'Record',
       ],
       archiveNights(nights).map((night) => [
         night.night,
@@ -3719,6 +3738,7 @@ function renderArchive() {
         vitalsLabel(night.lineage?.vitals),
         night.locked ? 'locked' : '',
         night.atRisk === true ? 'AT RISK' : night.atRisk == null ? '?' : '',
+        nightNote(night),
       ]),
     );
     const scroll3 = n('div', null, 'table-scroll');
@@ -3727,7 +3747,7 @@ function renderArchive() {
       scroll3,
       n(
         'p',
-        'Watch: S stages, H heart rate, B breathing, V HRV, M motion; capital = pod rows, lower case = sidecar, . = missing. Locked nights stay listed so they get archived; no scores are shown here.',
+        'Watch: S stages, H heart rate, B breathing, V HRV, M motion; capital = pod rows, lower case = sidecar, . = missing. Locked nights stay listed so they get archived; no scores are shown here. A superseded record is the old copy of an edited night: listed, never counted or trained on.',
         'footnote',
       ),
     );

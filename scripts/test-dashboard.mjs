@@ -24,7 +24,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   script +
-    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,jobRequest,jobParams,tailText,jobIndicator,jobElapsed,vitalsLabel,watchCell,archiveNights,archiveSummary,teacherCoverage,lineageCounts,pullAge,rawSource,setDoc:value=>{doc=value}}',
+    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,jobRequest,jobParams,tailText,jobIndicator,jobElapsed,vitalsLabel,watchCell,archiveNights,archiveSummary,teacherCoverage,lineageCounts,pullAge,rawSource,nightNote,setDoc:value=>{doc=value}}',
   context,
 );
 const {
@@ -465,7 +465,14 @@ test('archive nights list at-risk first, then newest, and count each state', () 
   ];
   assert.deepEqual(plain(api.archiveNights(nights).map((n) => n.night + ' ' + n.side)),
     ['2026-10-20 left', '2026-11-14 left', '2026-11-12 left', '2026-11-12 right', '2026-11-10 left']);
-  assert.deepEqual(plain(api.archiveSummary(nights)), { nights: 5, archived: 2, atRisk: 1, lost: 1, locked: 1, missingTeacher: 1, mixed: 1 });
+  assert.deepEqual(plain(api.archiveSummary(nights)), { superseded: 0, overlapping: 0, nights: 5, archived: 2, atRisk: 1, lost: 1, locked: 1, missingTeacher: 1, mixed: 1 });
+  const edited = [...nights, night('2026-11-10', 'left', { supersededBy: 9, sleepRecordId: 4 })];
+  edited[0] = { ...edited[0], overlaps: [4] };
+  assert.deepEqual(plain(api.archiveSummary(edited)), { superseded: 1, overlapping: 1, nights: 5, archived: 2, atRisk: 1, lost: 1, locked: 1, missingTeacher: 1, mixed: 1 });
+  assert.deepEqual(plain(api.teacherCoverage(edited)), plain(api.teacherCoverage(nights)));
+  assert.equal(api.nightNote(edited[5]), 'superseded by record 9');
+  assert.equal(api.nightNote(edited[0]), 'overlaps record 4');
+  assert.equal(api.nightNote(nights[1]), '');
   assert.deepEqual(plain(api.teacherCoverage(nights))[3], ['HRV (SDNN)', 0, 0, 5]);
   assert.deepEqual(plain(api.teacherCoverage(nights))[2], ['Breathing rate', 0, 5, 0]);
   assert.deepEqual(plain(api.lineageCounts(nights)), [['piezo-v1/live', 4], ['mixed (2 + unrecorded)', 1]]);
