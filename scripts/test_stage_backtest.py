@@ -200,6 +200,20 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(summary['resamples'], 10_000)
         self.assertGreater(summary['comparisons']['macroF1']['bootstrap95Percent'][0], 0)
 
+    def test_a_week_without_new_watch_nights_stops_cleanly(self):
+        data = json.loads((self.run / 'features.json').read_text())
+        data['nights'] = [n for n in data['nights'] if n['group'] <= '2026-11-13']
+        (self.run / 'features.json').write_text(json.dumps(data))
+        pod = SyntheticPod(self.live, self.starts)
+        try:
+            printed = self.score(pod)
+        finally:
+            pod.close()
+        self.assertIn('No Watch-labelled night groups after 2026-11-13 (latest labelled night group: 2026-11-13); nothing to score', printed)
+        self.assertEqual(pod.requests, [])
+        self.assertFalse((self.out / 'weekly.jsonl').exists())
+        self.assertFalse(self.log.exists())
+
     def test_refuses_when_the_live_model_is_not_selected_or_the_baseline_differs(self):
         pod = SyntheticPod({**self.live, 'version': 'other'}, self.starts)
         try:

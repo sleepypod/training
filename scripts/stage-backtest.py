@@ -290,7 +290,10 @@ def trial(ap, args):
         raise ValueError(f"Features are for the {data['side']} side, not {args.side}")
     groups = trial_nights(data, args.after)
     if not groups:
-        raise ValueError(f'No Watch-labelled night groups after {args.after}')
+        # A week without a new Watch night is not an error; nothing is read from the pod's models or scored.
+        last = max((n['group'] for n in data['nights']), default='none')
+        print(f'No Watch-labelled night groups after {args.after} (latest labelled night group: {last}); nothing to score')
+        return
 
     library = {m['id']: m for m in pod.get('sleep-stages/models', side=args.side)}
     if args.live_id not in library or args.baseline_id not in library:
