@@ -66,6 +66,20 @@ class Pod:
         self.requests.append({'path': path, 'params': params, 'file': name, 'sha256': hashlib.sha256(raw).hexdigest(), 'fetchedAt': iso(datetime.now(timezone.utc).timestamp() * 1000)})
         return data
 
+    def post(self, path, body):
+        """A POST route that only reads (model preview); recorded like a GET, with the body's hash."""
+        payload = json.dumps(body, separators=(',', ':')).encode()
+        request = urllib.request.Request(self.base + '/api/' + path, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        with open_url(self.opener, request, 120) as response:
+            raw = response.read()
+        self.bytes += len(raw)
+        update('Fetching', f'POST {path}: {len(raw):,} bytes')
+        name = f'{len(self.requests):05d}.json'
+        (self.output / name).write_bytes(raw)
+        self.requests.append({'path': path, 'method': 'POST', 'bodySha256': hashlib.sha256(payload).hexdigest(), 'file': name,
+                              'sha256': hashlib.sha256(raw).hexdigest(), 'fetchedAt': iso(datetime.now(timezone.utc).timestamp() * 1000)})
+        return json.loads(raw)
+
     def optional(self, path, **params):
         """A route a pod on older software may not have; None there instead of an error."""
         try:
