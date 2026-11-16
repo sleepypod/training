@@ -330,9 +330,13 @@ worker request in Python:
    database SHA-256, engine, profile and readings hashes in a `derived_snapshot` table.
 
 Acceptance:
-- parity gate: on nights whose lineage shows one unchanged profile, replaying that profile gives
-  per-minute HR within 0.1 bpm of the stored rows on ≥95% of minutes (local-fit `parity`
-  threshold); otherwise the replay isn't used for training
+- training gate (core #928 `parity.trainingGate`), judged on nights whose stored rows all ran the
+  replayed config, over spans where replay had RAW: ≥60 compared minutes, replayed/stored HR
+  minutes 0.90–1.15, |bias| ≤0.25 bpm, median |Δ| ≤0.5 bpm, ≥70% of minutes within 1 bpm; a
+  failing night keeps its stored rows. The originally planned 0.1 bpm on ≥95% of minutes cannot
+  pass: live and replay average windows offset by up to 30 s each minute (2026-10-19: 13% within
+  0.1, 75% within 1, bias −0.11). Thresholds rest on two nights; confirm on the first five gated
+  archived nights. The 0.1 bpm check stays for pod-vs-laptop backtest parity (`local-fit parity`)
 - all 24 raw nights replay with one engine and profile; the derived snapshot passes
   `export-runtime-features.ts` and `stage-backtest.py` on synthetic and real inputs
 - replay outputs are cached by (night, engine, profile) under `data/cache/vitals/`
