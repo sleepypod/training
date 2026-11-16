@@ -1,7 +1,7 @@
 # Pod model graph: plan
 
 Drafted 2026-11-15 from the 2026-11-14/15 training session; built out the same day after
-checking core `dev`, the pod and local data. Status: accepted 2026-11-15. The owner took the
+checking core `dev`, the pod and local data. Status: accepted 2026-11-15; implemented 2026-11-16 (see Implementation status). The owner took the
 recommended answer to every decision (Q1–Q7), and the other sleeper consented to archiving (Q2).
 Results quoted below are one participant's retrospective aggregates, not validation.
 
@@ -34,6 +34,37 @@ Most of the plumbing already exists in core: an off-pod archiver for the analysi
 a laptop replay of the pod's own vitals engine. The new work is mostly glue (an archive
 index, replayed training inputs), a model-set contract, and a search harness with a locked
 holdout. The urgent item is A1: the pod is pruning about one night of raw per day.
+
+## Implementation status (2026-11-16)
+
+Every item not gated by data or a pending result is implemented. Training PRs are merged;
+core and iOS PRs are open for review (they change what the pod and phone run).
+
+| Item | State | Where |
+| --- | --- | --- |
+| A1 + B3 archive | Done: first pull 2,477 RAW, 1.1M rows; nightly launchd agent at 12:30 | core #925 (`--curl`), training #25 |
+| A1b, A3 index, lineage, Watch coverage | Done; lineage from processing runs (core #930 identity) | training #25, #30 |
+| A2 nightly Watch motion | Code done; 7-night on-device check pending | iOS #109 |
+| A5 locked holdout | Done | training #26, #38 |
+| A6 archive inputs | Done | training #28, #31 |
+| B1/B2/B4/B5 dashboard | Done | training #32, #35, #37 |
+| C1 profile rebase (Q1: auto-activate) | PR open | core #927 |
+| C2 re-pin | Likely unneeded: #927 restores the saved overrides on the next deploy | — |
+| C3 robust breathing display | PR open; floor may read ~0.7/min low once #927 deploys | core #926 |
+| C4 breathing ranking | PR open | core #929 |
+| C5 replay from archive + derived snapshot | Core PR open; training merged | core #928, training #27 |
+| D1 movement export | Done | training #24 |
+| D2–D4, E3 | Gated: ~20 Watch-motion nights | sleepypod-core-132/133/139, training-4 |
+| E1 weekly trial | Tooling done; first scorable night 11-15; Q5 on 11-28 | training #29, training-18 |
+| E2 replayed vs live | Run 2026-11-16: tie (+0.000 [−0.036, +0.037]); no export | knowledge/evaluation/e2-replayed-vitals-2026-11-16.md |
+| E4 two-step format | Gated on an F final confirming it | sleepypod-core-138 |
+| F search harness | Done; reproduces the cross-fitted fusion run exactly | training #34 |
+| Model set + Q6 (`inputMismatch`) | PR open | core #930 |
+
+Found while implementing: macOS Local Network privacy blocks node and Python (not `curl`) on
+this machine, hence the curl transports (core #925, training #22); per-minute replay parity
+cannot reach 0.1 bpm (C5 gate above); the stage-model evaluator compares float64 inputs where
+sklearn uses float32 (sleepypod-core-140).
 
 ## Where things stand
 
@@ -331,9 +362,10 @@ worker request in Python:
 
 Acceptance:
 - training gate (core #928 `parity.trainingGate`), judged on nights whose stored rows all ran the
-  replayed config, over spans where replay had RAW: ≥60 compared minutes, replayed/stored HR
-  minutes 0.90–1.15, |bias| ≤0.25 bpm, median |Δ| ≤0.5 bpm, ≥70% of minutes within 1 bpm; a
-  failing night keeps its stored rows. The originally planned 0.1 bpm on ≥95% of minutes cannot
+  replayed config, inside the night's sleep sessions where replay had RAW: ≥60 compared minutes,
+  replayed/stored HR minutes 0.90–1.20, |trimmed bias| ≤0.25 bpm (minutes within 5 bpm), median
+  |Δ| ≤0.6 bpm, ≥70% of minutes with both HRs within 1 bpm, ≤10% jumps over 5 bpm; a failing
+  night keeps its stored rows. Recalibrated on 17 archived nights (16 pass with defaults). The originally planned 0.1 bpm on ≥95% of minutes cannot
   pass: live and replay average windows offset by up to 30 s each minute (2026-10-19: 13% within
   0.1, 75% within 1, bias −0.11). Thresholds rest on two nights; confirm on the first five gated
   archived nights. The 0.1 bpm check stays for pod-vs-laptop backtest parity (`local-fit parity`)
