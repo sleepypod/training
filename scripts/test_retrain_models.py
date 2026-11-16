@@ -1,6 +1,10 @@
 """Behavioral checks for the offline whole-night model evaluation."""
+from contextlib import redirect_stdout
 import importlib.util
+import io
+import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -69,6 +73,55 @@ class RetrainingTests(unittest.TestCase):
         actual = [m.pm.evaluate_portable(doc, x) for x in xs]
         self.assertEqual(actual, clf.predict(xs).tolist())
         self.assertTrue(set(actual).issubset({1, 2, 3}))
+
+
+    def test_locked_nights_reach_only_a_logged_final_read(self):
+        groups = ['2026-11-08', '2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-14', '2026-11-15']
+        nights = [{'id': i, 'group': g, 'start': i * 86400, 'end': i * 86400 + 3000, 'watchEpochs': 8,
+                   'rows': [{'start': i * 86400 + k * 300, 'x': [float(k)], 'y': k % 4, 'rule': 1} for k in range(8)]}
+                  for i, g in enumerate(groups)]
+        class Constant:
+            def predict(self, xs): return np.ones(len(xs), dtype=int)
+        seen = []
+        def choose(train, rules):
+            seen.extend(n['group'] for n in train)
+            return m.CANDIDATES[1], {}
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            features = root / 'features.json'
+            features.write_text(json.dumps({'nights': nights, 'features': ['a'], 'ruleset': {'smoothIsolatedEpochs': False, 'transitions': []}, 'sources': {}}))
+            log = root / 'access.jsonl'
+            with patch.object(m, 'inner_choice', side_effect=choose), patch.object(m, 'fit', return_value=Constant()), \
+                    patch.object(m, 'permutation_drops', return_value={'a': [0.0] * 3}), \
+                    patch.object(m, 'export', return_value={'sha256': 'ab' * 32, 'parityRows': 1, 'modelBytes': 1}), \
+                    patch.object(m.ho, 'access_log', return_value=log), redirect_stdout(io.StringIO()):
+                with patch('sys.argv', ['x', str(features), '--out', str(root / 'dev')]):
+                    m.main()
+                self.assertNotIn('2026-11-14', seen)
+                self.assertFalse(log.exists())
+                report = json.loads((root / 'dev/report.json').read_text())
+                self.assertNotIn('holdoutFinal', report)
+                self.assertEqual(report['protocol']['holdout']['lockedGroups'], ['2026-11-14'])
+                self.assertEqual(report['groups'], 6)
+                traces = json.loads((root / 'dev/timelines.json').read_text())
+                self.assertNotIn('2026-11-14', {s['group'] for s in traces['sessions']})
+                with patch('sys.argv', ['x', str(features), '--out', str(root / 'final'), '--holdout-final']):
+                    m.main()
+            self.assertNotIn('2026-11-14', seen)
+            final = json.loads((root / 'final/report.json').read_text())['holdoutFinal']
+            self.assertEqual((final['nights'], final['scores']['epochs'], final['modelSha256']), (['2026-11-14'], 8, 'ab' * 32))
+            self.assertEqual(final['rules']['epochs'], 8)
+            [entry] = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual((entry['purpose'], entry['nights'], entry['modelSha256']), ('final', ['2026-11-14'], 'ab' * 32))
+            self.assertTrue(entry['run'].endswith('final'))
+
+    def test_final_read_needs_locked_nights(self):
+        with tempfile.TemporaryDirectory() as d:
+            features = Path(d) / 'features.json'
+            features.write_text(json.dumps({'nights': [{'group': '2026-11-13', 'rows': []}], 'ruleset': {}, 'sources': {}}))
+            with patch('sys.argv', ['x', str(features), '--out', str(Path(d) / 'o'), '--holdout-final']), \
+                    self.assertRaisesRegex(ValueError, 'no locked night'):
+                m.main()
 
 
 if __name__ == '__main__':

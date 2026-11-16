@@ -2,11 +2,22 @@
 import numpy as np
 from scipy.stats import ks_2samp, skew
 
+import holdout as ho
+
 STAGES = ['wake', 'light', 'deep', 'rem']
 
 
+def is_locked(group):
+    try:
+        return ho.locked(group)
+    except (TypeError, ValueError):  # older runs can lack a night-date group
+        return False
+
+
 def describe(data):
-    nights = data['nights']
+    """Locked holdout nights are left out and only listed, like every other view of their data."""
+    locked = sorted({n['group'] for n in data['nights'] if is_locked(n.get('group'))})
+    nights = [n for n in data['nights'] if not is_locked(n.get('group'))]
     rows = [r for n in nights for r in n['rows']]
     x = np.asarray([r['x'] for r in rows], dtype=float)
     if not len(rows) or x.ndim != 2 or x.shape[1] != len(data['features']):
@@ -34,6 +45,6 @@ def describe(data):
                          'labeled': sum(classes.values()), 'classes': classes,
                          'gaps': sum(b.get('start', 0) - a.get('start', 0) > 300 for a, b in zip(n['rows'], n['rows'][1:]))})
     return {'columns': columns, 'sessions': sessions, 'rows': len(rows), 'timeZone': data.get('timeZone'),
-            'side': data.get('side'), 'features': len(columns), 'matrixBytes': x.nbytes,
+            'side': data.get('side'), 'features': len(columns), 'matrixBytes': x.nbytes, 'lockedGroups': locked,
             'nonfinite': int((~np.isfinite(x)).sum()), 'labeled': sum(n['labeled'] for n in sessions),
             'driftNote': 'Descriptive two-sample KS comparisons: each night versus all other nights. Adjacent epochs are correlated and many comparisons are made; p-values are unadjusted, not a pass/fail test.'}

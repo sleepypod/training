@@ -286,6 +286,29 @@ uv run --locked python scripts/stage-backtest.py data/runs/RUN/features.json \
   --snapshot data/biometrics.db --out data/runs/backtest
 ```
 
+## Locked holdout
+
+From the night of 2026-11-14, every fourth night group (11-14, 11-18, 11-22, …) is
+locked ([rule](knowledge/evaluation/locked-holdout.md), `scripts/holdout.py`).
+`train.py`, `retrain-models.py`, `stage-backtest.py`, `feature-ablation.py`,
+`fusion.py` and `sequence-decoding.py` drop locked nights before any fitting,
+selection or feature analysis, and record the rule and the dropped groups under
+`holdout` in their protocol. The dashboard shows "Locked holdout" in place of
+scores for those nights.
+
+`--holdout-final` is the only way a development run reads them, and only `train.py`
+and `retrain-models.py` accept it. Training and selection still use development
+nights only. After export, the run appends the candidate's SHA-256 and the locked
+nights to `data/holdout-access.jsonl` in the primary checkout, then scores the
+candidate on them once (`holdoutFinal` in `model/report.json`). Every read spends
+the holdout, so make one per finished candidate. The other scripts fit, tune or
+compare on the nights they score, so they refuse the flag.
+
+```sh
+uv run --locked python scripts/retrain-models.py data/runs/RUN/features.json \
+  --out data/runs/RUN-final --holdout-final
+```
+
 ## Multi-source training
 
 Watch signals teach the pod models; they are never stage-model inputs. Watch stages

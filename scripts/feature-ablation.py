@@ -12,7 +12,8 @@ Watch motion is never a feature: Watch stages are the labels.
 
 One forest configuration, frozen before evaluation, is fitted per arm per outer
 held-out night group. The hierarchical arm separates wake from sleep first and
-stages sleep second (Kortelainen 2010). Not prospective; never exports a model.
+stages sleep second (Kortelainen 2010). Locked holdout nights (holdout.py) are
+dropped before any feature is computed. Not prospective; never exports a model.
 """
 import argparse
 import hashlib
@@ -30,6 +31,7 @@ spec = importlib.util.spec_from_file_location('retraining', Path(__file__).with_
 rm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rm)
 pm = rm.pm
+import holdout as ho
 
 EPOCH = 300
 WAKE = pm.STAGES.index('wake')
@@ -179,11 +181,15 @@ def main():
     ap.add_argument('features', type=Path, help='features.json from export-runtime-features.ts')
     ap.add_argument('--snapshot', type=Path, required=True, help='The biometrics snapshot those features came from')
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--holdout-final', action='store_true', help='Refused: an ablation compares feature arms on the nights it scores')
     args = ap.parse_args()
+    if args.holdout_final:
+        ho.refuse_final(ap, 'an ablation selects among feature arms')
     data = json.loads(args.features.read_text())
     if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
         raise ValueError('Snapshot does not match the one these features were exported from')
-    nights, features, ruleset, side = data['nights'], data['features'], data['ruleset'], data['side']
+    holdout = ho.record({n['group'] for n in data['nights']})
+    nights, features, ruleset, side = ho.drop_locked(data['nights']), data['features'], data['ruleset'], data['side']
     groups = sorted({n['group'] for n in nights})
     if len(groups) < 5:
         raise ValueError('Need at least five independent night groups')
@@ -197,7 +203,7 @@ def main():
         arms={arm: arm_columns(features, arm) for arm in ARMS}, hierarchical=f'{HIERARCHICAL}: wake/sleep forest then three-stage forest, all features',
         forest=FOREST, outer='leave-one-night-group-out', selection='none: one frozen configuration per arm',
         postprocessing='production smoothing and transition rules', watchMotionAsFeature=False,
-        prospective=False, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
+        prospective=False, holdout=holdout, inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
     datasets = {arm: build(nights, features, extras, arm)[0] for arm in ARMS}
     keys = list(ARMS) + [HIERARCHICAL]

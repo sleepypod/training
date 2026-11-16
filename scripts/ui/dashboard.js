@@ -58,6 +58,10 @@ const glossary = {
     'Held-out / nested selection / inner & outer',
     'Held-out data is excluded from fitting. Outer folds estimate performance on a left-out night. Inner GroupKFold splits only the remaining training nights to choose the candidate, without using the outer night’s labels. The pooled candidate score evaluates this selection procedure, which may choose different models on different nights. These previously inspected nights are still retrospective evidence.',
   ],
+  holdout: [
+    'Locked holdout',
+    'From the night of 14 Nov 2026, every fourth night is locked: 14 Nov, 18 Nov, 22 Nov and so on. Training, tuning, feature selection and these views leave locked nights out, so they stay unseen for an honest final check. Only two reads may score them: a model already running on the pod (the weekly trial) and one final score of a finished candidate. Each read is logged in data/holdout-access.jsonl, and its scores stay in that run’s command-line report rather than here.',
+  ],
   final: [
     'Final model / in-sample / overfitting',
     'After evaluation, we select and fit a candidate using all available nights. Its predictions on those same nights are in-sample: useful for inspection, but optimistic as an estimate of future performance. Overfitting means learning the quirks of the training data rather than patterns that carry to new nights. Keep held-out results separate from final-model views.',
@@ -364,12 +368,30 @@ function metrics(cm) {
     cols,
   };
 }
-function folds() {
+// Mirrors scripts/holdout.py: from the freeze night on, every fourth night group is locked.
+const HOLDOUT_FREEZE = '2026-11-14',
+  HOLDOUT_EVERY = 4;
+function lockedNight(group) {
+  if (!isNightDate(group)) return false;
+  const days = (Date.parse(group) - Date.parse(HOLDOUT_FREEZE)) / 86400000;
+  return days >= 0 && days % HOLDOUT_EVERY === 0;
+}
+function lockedNote(text) {
+  const e = empty(text || 'Locked holdout');
+  e.append(help('holdout'));
+  return e;
+}
+function allFolds() {
   return doc?.report?.folds || doc?.state?.folds || [];
+}
+function folds() {
+  return allFolds().filter((f) => !lockedNight(f.group));
 }
 function score(key) {
   const recorded = doc?.report?.scores?.[key];
-  if (recorded) return { ...metrics(recorded.confusion), ...recorded };
+  // Pooled scores recorded over a locked night cannot be split; rebuild them from development folds.
+  if (recorded && !allFolds().some((f) => lockedNight(f.group)))
+    return { ...metrics(recorded.confusion), ...recorded };
   const fs = folds();
   if (!fs.length) return null;
   const cms = fs
@@ -675,7 +697,10 @@ function renderOverview() {
   const wins = fs.filter(
       (f) => f.scores[f.selected].macroF1 > f.scores.existing_depth8.macroF1,
     ).length,
-    ci = r?.uncertainty?.nightBootstrap95Percent;
+    // Recorded over every fold, a locked one included, so it cannot be shown.
+    ci = allFolds().some((f) => lockedNight(f.group))
+      ? null
+      : r?.uncertainty?.nightBootstrap95Percent;
   const ds = doc.diagnostics;
   const stageDiff = a && b ? a.f1.map((v, i) => v - b.f1[i]) : [];
   const worst = stageDiff.length ? Math.min(...stageDiff) : null;
@@ -874,8 +899,13 @@ function renderOverview() {
 function renderFolds() {
   const fs = folds(),
     sessions = doc.diagnostics?.sessions || [],
-    groups = [...new Set(sessions.map((n) => n.group))].sort();
-  if (!groups.length) groups.push(...fs.map((f) => f.group));
+    groups = [
+      ...new Set([
+        ...sessions.map((n) => n.group),
+        ...(doc.diagnostics?.lockedGroups || []),
+      ]),
+    ].sort();
+  if (!groups.length) groups.push(...allFolds().map((f) => f.group));
   $('fold-pills').replaceChildren(
     ...groups.map((g, i) => {
       const f = fs.find((f) => f.group === g),
@@ -884,12 +914,14 @@ function renderFolds() {
           'Night ' +
             (i + 1) +
             ' · ' +
-            (f
-              ? delta(
-                  f.scores[f.selected].macroF1 -
-                    f.scores.existing_depth8.macroF1,
-                )
-              : 'pending'),
+            (lockedNight(g)
+              ? 'locked holdout'
+              : f
+                ? delta(
+                    f.scores[f.selected].macroF1 -
+                      f.scores.existing_depth8.macroF1,
+                  )
+                : 'pending'),
         );
       b.onclick = () => openGroup(g);
       return b;
@@ -917,6 +949,20 @@ function renderFolds() {
         b = f?.scores.existing_depth8,
         link = n('button', g);
       link.onclick = () => openGroup(g);
+      if (lockedNight(g))
+        return [
+          i + 1,
+          g,
+          '—',
+          '—',
+          '—',
+          term('holdout', 'Locked holdout'),
+          '—',
+          '—',
+          '—',
+          '—',
+          'locked holdout',
+        ];
       return [
         i + 1,
         link,
@@ -1067,7 +1113,9 @@ function selectedNight() {
 }
 function renderTimelines() {
   const sessions = doc.timelines?.sessions || [];
-  const evaluated = sessions.filter((n) => n.heldOutModel);
+  const evaluated = sessions.filter(
+    (n) => n.heldOutModel && !lockedNight(n.group),
+  );
   if (!nightPicked && evaluated.length)
     nightId = evaluated[evaluated.length - 1].id;
   else if (!sessions.some((n) => n.id === nightId)) nightId = sessions[0]?.id;
@@ -1091,18 +1139,21 @@ function renderTimelines() {
     $('overview-timeline').append(
       miniNights(),
       architecture(
-        sessions.flatMap((n) => n.rows),
+        sessions.filter((n) => !lockedNight(n.group)).flatMap((n) => n.rows),
         'Sleep architecture · evaluated intervals',
         'heldOut',
       ),
     );
-    $('nights-timeline').append(
-      architecture(
-        selectedNight().rows,
-        'Sleep architecture · this night',
-        mode,
-      ),
-    );
+    const locked = lockedNight(selectedNight().group),
+      balance = locked
+        ? panel('Sleep architecture · this night', 'architecture')
+        : architecture(
+            selectedNight().rows,
+            'Sleep architecture · this night',
+            mode,
+          );
+    if (locked) balance.append(lockedNote());
+    $('nights-timeline').append(balance);
     const host = $('nights-timeline'),
       content = n('div');
     content.append(...Array.from(host.children));
@@ -1115,7 +1166,16 @@ function renderTimelines() {
         time(night.start, true) + ' · ' + night.id,
         night.id === nightId ? 'selected' : '',
       );
-      b.append(n('small', night.heldOutModel ? 'Evaluated' : 'Pending'));
+      b.append(
+        n(
+          'small',
+          lockedNight(night.group)
+            ? 'Locked holdout'
+            : night.heldOutModel
+              ? 'Evaluated'
+              : 'Pending',
+        ),
+      );
       b.onclick = () => {
         nightId = night.id;
         nightPicked = true;
@@ -1203,6 +1263,14 @@ function timelinePanel(overview) {
   dl.append(ds);
   controls.append(dl);
   p.append(controls);
+  if (lockedNight(night.group)) {
+    p.append(
+      lockedNote(
+        'Locked holdout · stages and agreement for this night stay hidden until its final read.',
+      ),
+    );
+    return p;
+  }
   const note =
     mode === 'final'
       ? 'Final-model predictions are fitted on these nights. Baseline remains held out; this is not a like-for-like validation comparison.'
@@ -1541,8 +1609,26 @@ function miniNights() {
     b.setAttribute('aria-label', 'Inspect night ' + night.id);
     b.append(
       n('strong', time(night.start, true) + ' · ' + night.id),
-      n('span', night.heldOutModel ? 'Held out' : 'Not evaluated', 'muted'),
+      n(
+        'span',
+        lockedNight(night.group)
+          ? 'Locked holdout'
+          : night.heldOutModel
+            ? 'Held out'
+            : 'Not evaluated',
+        'muted',
+      ),
     );
+    b.onclick = () => {
+      nightId = night.id;
+      nightPicked = true;
+      epoch = 0;
+      renderTimelines();
+      showTab('nights');
+      $('content').scrollIntoView({ block: 'start' });
+    };
+    grid.append(b);
+    if (lockedNight(night.group)) continue;
     const svg = svgEl('svg', {
       viewBox: '0 0 390 156',
       role: 'img',
@@ -1559,15 +1645,6 @@ function miniNights() {
       true,
     );
     b.append(svg);
-    b.onclick = () => {
-      nightId = night.id;
-      nightPicked = true;
-      epoch = 0;
-      renderTimelines();
-      showTab('nights');
-      $('content').scrollIntoView({ block: 'start' });
-    };
-    grid.append(b);
   }
   p.append(
     grid,
@@ -1701,7 +1778,7 @@ function isoWeek(group) {
 }
 // One entry per night group. Every source shares the same intervals (those
 // where all displayed sources have a stage); a night without any shared
-// interval is a gap, never zero minutes.
+// interval is a gap, never zero minutes. A locked holdout night is a gap too.
 function weeklyNights(sessions, keys) {
   const groups = new Map();
   for (const session of sessions) {
@@ -1713,6 +1790,15 @@ function weeklyNights(sessions, keys) {
   return [...groups.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([group, rows]) => {
+      if (lockedNight(group))
+        return {
+          group,
+          week: isoWeek(group),
+          epochs: 0,
+          gap: true,
+          locked: true,
+          minutes: null,
+        };
       const common = sharedEpochs(rows, keys),
         minutes = Object.fromEntries(
           keys.map((key) => [
@@ -1970,7 +2056,10 @@ function renderWeeks() {
           svgEl(
             'title',
             {},
-            night.group + ': no interval shared by every displayed source',
+            night.group +
+              (night.locked
+                ? ': locked holdout'
+                : ': no interval shared by every displayed source'),
           ),
         );
         svg.append(r);
@@ -2056,7 +2145,11 @@ function renderWeeks() {
     nights.map((night) => [
       night.group,
       night.week.key,
-      night.gap ? 'None (gap)' : String(night.epochs),
+      night.locked
+        ? 'Locked holdout'
+        : night.gap
+          ? 'None (gap)'
+          : String(night.epochs),
       ...keys.map((key) =>
         night.gap
           ? '—'
@@ -2071,7 +2164,7 @@ function renderWeeks() {
     exact,
     n(
       'p',
-      `Nights are local noon-to-noon groups (${doc.timelines.timeZone}); weeks are ISO weeks starting Monday. Each night counts only intervals where every displayed source has a stage, so sources share a denominator. Averages use nights with shared data; days without a recording are blank and nights without shared data are dashed, never counted as zero. Δ is minutes versus Watch; amber marks a difference above 15% (a visual cue, not a release criterion).`,
+      `Nights are local noon-to-noon groups (${doc.timelines.timeZone}); weeks are ISO weeks starting Monday. Each night counts only intervals where every displayed source has a stage, so sources share a denominator. Averages use nights with shared data; days without a recording are blank and nights without shared data or in the locked holdout are dashed, never counted as zero. Δ is minutes versus Watch; amber marks a difference above 15% (a visual cue, not a release criterion).`,
       'footnote',
     ),
   );

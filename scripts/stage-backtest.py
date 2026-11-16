@@ -5,7 +5,8 @@ Two schedules, both strictly chronological by night group:
 - frozen: fit once on the first nights, score every later night without refitting,
   as a model shipped on that date and never retrained would.
 Arms are the frozen forests from feature-ablation.py plus the stages the pod
-actually recorded live. Not prospective; never exports, uploads or activates.
+actually recorded live. Locked holdout nights (holdout.py) are dropped first. Not
+prospective; never exports, uploads or activates.
 """
 import argparse
 from collections import defaultdict
@@ -24,6 +25,7 @@ spec = importlib.util.spec_from_file_location('feature_ablation', Path(__file__)
 fa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fa)
 rm, pm = fa.rm, fa.pm
+import holdout as ho
 
 MODELS = ('base', 'all', 'hierarchical_all')
 POD = 'pod_live'
@@ -113,14 +115,18 @@ def main():
     ap.add_argument('features', type=Path, help='features.json from export-runtime-features.ts')
     ap.add_argument('--snapshot', type=Path, required=True, help='The biometrics snapshot those features came from')
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--holdout-final', action='store_true', help='Refused: walk-forward refits and compares arms on the nights it scores')
     args = ap.parse_args()
+    if args.holdout_final:
+        ho.refuse_final(ap, 'every walk-forward test night refits and compares arms')
     data = json.loads(args.features.read_text())
     if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
         raise ValueError('Snapshot does not match the one these features were exported from')
     args.out.mkdir(parents=True, exist_ok=True)
     if any(args.out.iterdir()):
         raise ValueError('Use an empty output directory; do not overwrite an evaluation or partial run')
-    nights, features, ruleset = data['nights'], data['features'], data['ruleset']
+    holdout = ho.record({n['group'] for n in data['nights']})
+    nights, features, ruleset = ho.drop_locked(data['nights']), data['features'], data['ruleset']
     with sqlite3.connect(f'file:{args.snapshot.resolve()}?mode=ro', uri=True) as db:
         extras = [fa.augment(n, features, db, data['side']) for n in nights]
     rng = np.random.default_rng(42)
@@ -128,7 +134,7 @@ def main():
         ablationSha256=hashlib.sha256(Path(fa.__file__).read_bytes()).hexdigest(), models=list(MODELS),
         baseline=f'{POD}: stages the pod recorded live for each night (its selected model may have trained on some of these nights)',
         minTrainGroups=MIN_TRAIN_GROUPS, forest=fa.FOREST, order='chronological by noon-to-noon night group',
-        postprocessing='production smoothing and transition rules', prospective=False,
+        postprocessing='production smoothing and transition rules', prospective=False, holdout=holdout,
         inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     report = dict(protocol=protocol, schedules={kind: run(kind, nights, features, extras, ruleset, rng) for kind in ('walk-forward', 'frozen')},
         limitations=['One participant; nights were inspected before, so this is retrospective, not prospective.',

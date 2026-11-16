@@ -7,17 +7,24 @@ const script = readFileSync(
   'utf8',
 ).split("document.addEventListener('click'")[0];
 function element(tag) {
-  return { tag, children: [], attrs: {}, dataset: {}, append(...items) { this.children.push(...items); },
+  return { tag, children: [], attrs: {}, dataset: {}, style: {}, append(...items) { this.children.push(...items); },
+    prepend(...items) { this.children.unshift(...items); },
+    replaceChildren(...items) { this.children = items; },
     setAttribute(k, v) { this.attrs[k] = v; }, textContent: '' };
 }
+const elements = {};
 const context = vm.createContext({
-  document: { createElement: element, createElementNS: (_, tag) => element(tag) },
+  document: { createElement: element, createElementNS: (_, tag) => element(tag),
+    createTextNode: (text) => ({ textContent: String(text), children: [] }),
+    getElementById: (id) => (elements[id] ??= element('div')) },
+  // Mock elements are plain objects; primitives become text nodes, as in the browser.
+  Node: Object,
   location: { protocol: 'http:' },
   embedded: {},
 });
 vm.runInContext(
   script +
-    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,setDoc:value=>{doc=value}}',
+    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,setDoc:value=>{doc=value}}',
   context,
 );
 const {
@@ -328,4 +335,73 @@ test('band hit titles retain every overlapping phone state and confidence', () =
   const svg = element('svg');
   context.testAPI.phoneOverlay(svg,capture,t=>t,20,false);
   assert.ok(svg.children.every(r=>r.attrs['pointer-events']==='none'));
+});
+
+const allText = (e) => [e.textContent, ...(e.children || []).map(allText)].join(' ');
+test('locked holdout follows the rule in holdout.py', () => {
+  const source = readFileSync(new URL('./holdout.py', import.meta.url), 'utf8');
+  assert.equal(source.match(/^FREEZE = '(.+)'$/m)[1], '2026-11-14');
+  assert.equal(Number(source.match(/^EVERY = (\d+)$/m)[1]), 4);
+  const { lockedNight } = context.testAPI;
+  assert.deepEqual(
+    ['2026-11-13', '2026-11-14', '2026-11-15', '2026-11-18', '2026-11-30', '2026-12-02', 'night-3', undefined].map(lockedNight),
+    [false, true, false, true, true, false, false, false],
+  );
+});
+test('weekly views treat a locked night as a gap, never as data', () => {
+  const keys = ['watch', 'pod'];
+  const nights = weeklyNights(
+    [
+      { group: '2026-11-13', rows: [row(0, 1, 1)] },
+      { group: '2026-11-14', rows: [row(300, 2, 2)] },
+    ],
+    keys,
+  );
+  assert.deepEqual(plain(nights.map((n) => [n.group, n.locked ?? false, n.gap, n.minutes])), [
+    ['2026-11-13', false, false, { watch: [0, 5, 0, 0], pod: [0, 5, 0, 0] }],
+    ['2026-11-14', true, true, null],
+  ]);
+  const [week] = weeklySummary(nights, keys);
+  assert.equal(week.nightsWithData, 1);
+  assert.deepEqual(plain(week.average.watch), [0, 5, 0, 0]);
+});
+const lockedDoc = () => ({
+  state: {},
+  diagnostics: { sessions: [{ group: '2026-11-13', rows: 10, labeled: 8 }], lockedGroups: ['2026-11-14'] },
+  report: {
+    scores: { existing_depth8: { confusion: [[0, 0, 0, 0], [0, 9, 0, 0], [0, 0, 9, 0], [0, 0, 0, 0]] } },
+    folds: [
+      { group: '2026-11-13', selected: 'balanced_leaf5', seconds: 1,
+        scores: { balanced_leaf5: { macroF1: 0.5, kappa: 0.4, epochs: 8 },
+          existing_depth8: { macroF1: 0.25, confusion: [[0, 0, 0, 0], [0, 4, 0, 0], [0, 4, 0, 0], [0, 0, 0, 0]] } } },
+      { group: '2026-11-14', selected: 'balanced_leaf5', seconds: 1,
+        scores: { balanced_leaf5: { macroF1: 0.987, kappa: 0.876, epochs: 8 },
+          existing_depth8: { macroF1: 0.123, confusion: [[0, 0, 0, 0], [0, 5, 0, 0], [0, 0, 5, 0], [0, 0, 0, 0]] } } },
+    ],
+  },
+});
+test('scores and fold views never show a locked night', () => {
+  const api = context.testAPI;
+  api.setDoc(lockedDoc());
+  assert.deepEqual(plain(api.folds().map((f) => f.group)), ['2026-11-13']);
+  // The recorded pool includes the locked night, so the score comes from development folds.
+  assert.equal(api.score('existing_depth8').epochs, 8);
+  api.renderFolds();
+  const table = allText(elements['fold-table']),
+    pills = allText(elements['fold-pills']);
+  assert.match(table, /Locked holdout/);
+  assert.match(pills, /locked holdout/);
+  assert.doesNotMatch(table + pills, /0\.987|0\.876|0\.123|0\.864/);
+  assert.match(table, /0\.500/);
+});
+test('night cards show a locked night without its hypnogram', () => {
+  const api = context.testAPI;
+  api.setDoc({ timelines: { timeZone: 'UTC', sessions: [
+    { id: '7', group: '2026-11-14', start: 0, end: 600, heldOutModel: 'balanced_leaf5',
+      rows: [row(0, 1, 1, 1, 1), row(300, 2, 2, 2, 2)] },
+  ] } });
+  const panel = api.miniNights(),
+    find = (e, tag) => e.tag === tag || (e.children || []).some((c) => find(c, tag));
+  assert.match(allText(panel), /Locked holdout/);
+  assert.ok(!find(panel, 'svg'));
 });

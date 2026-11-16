@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 
 from dashboard import serve, write_report
+from diagnostics import describe
 from run_history import Catalog
 from progress import update
 
@@ -36,6 +37,14 @@ class DashboardTests(unittest.TestCase):
                     else: request = base + path
                     with self.assertRaises(urllib.error.HTTPError): urllib.request.urlopen(request)
             finally: server.shutdown();server.server_close()
+
+    def test_diagnostics_leave_locked_nights_out(self):
+        rows = [{'start': 0, 'x': [1.0], 'y': 1}, {'start': 300, 'x': [2.0], 'y': 2}]
+        data = {'features': ['a'], 'nights': [{'id': 1, 'group': '2026-11-13', 'rows': rows}, {'id': 2, 'group': '2026-11-14', 'rows': rows}]}
+        result = describe(data)
+        self.assertEqual([s['group'] for s in result['sessions']], ['2026-11-13'])
+        self.assertEqual(result['lockedGroups'], ['2026-11-14'])
+        self.assertEqual(result['rows'], 2)
 
     def test_failed_progress_preserves_counters(self):
         with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {'TRAINING_PROGRESS': str(Path(d) / 'progress.json')}):

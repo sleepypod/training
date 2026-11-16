@@ -13,7 +13,8 @@ trained the movement model only, cross-fitted: when night T is held out, every
 night's movement features (training and test) come from movement models fitted
 without T's Watch motion. Evaluated leave-one-night-out and chronologically
 (walk-forward and frozen) against the stages the pod recorded live; pod and model
-are compared on the same labelled epochs (those with a live pod stage).
+are compared on the same labelled epochs (those with a live pod stage). Locked
+holdout nights (holdout.py) are dropped before any feature is computed.
 Not prospective; never exports, uploads or activates.
 """
 import argparse
@@ -38,6 +39,7 @@ def load(name, filename):
 
 fa = load('feature_ablation', 'feature-ablation.py')
 sb = load('stage_backtest', 'stage-backtest.py')
+import holdout as ho
 import movement_model as mm
 import vitals_reference as vr
 
@@ -178,7 +180,10 @@ def main():
     ap.add_argument('--movement-epochs', type=Path, required=True, help='movement_model.py epochs output')
     ap.add_argument('--pod-model-trained-through', help='Last night group the pod-live model trained on; later nights are reported separately')
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--holdout-final', action='store_true', help='Refused: fusion compares feature arms on the nights it scores')
     args = ap.parse_args()
+    if args.holdout_final:
+        ho.refuse_final(ap, 'fusion compares feature arms')
     data = json.loads(args.features.read_text())
     if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
         raise ValueError('Snapshot does not match the one these features were exported from')
@@ -192,9 +197,11 @@ def main():
         raise ValueError('Use an empty output directory; do not overwrite an evaluation or partial run')
     features, ruleset, side = data['features'], data['ruleset'], data['side']
     require_pod_native(data)
-    nights = [n for n in data['nights'] if str(n['id']) in movement['sessions']]
+    holdout = ho.record({n['group'] for n in data['nights']})
+    development = ho.drop_locked(data['nights'])
+    nights = [n for n in development if str(n['id']) in movement['sessions']]
     groups = sorted({n['group'] for n in nights})
-    excluded = sorted({n['group'] for n in data['nights']} - set(groups))
+    excluded = sorted({n['group'] for n in development} - set(groups))
     base_extras = []
     with sqlite3.connect(f'file:{args.snapshot.resolve()}?mode=ro', uri=True) as db:
         for night in nights:
@@ -214,7 +221,7 @@ def main():
         podModelTrainedThrough=args.pod_model_trained_through, watchSignalsAsFeatures=False,
         crossFitting='movement features for every night come from models fitted without the held-out night\'s Watch motion',
         podComparisonEpochs='chronological scores use labelled epochs with a live pod stage, for every arm; podCoverage per night',
-        postprocessing='production smoothing and transition rules', prospective=False,
+        postprocessing='production smoothing and transition rules', prospective=False, holdout=holdout,
         inputSha256=hashlib.sha256(args.features.read_bytes()).hexdigest(), sources=data['sources'])
     (args.out / 'protocol.json').write_text(json.dumps(protocol, indent=2))
     report = dict(protocol=protocol, groups=len(groups), sessions=len(nights),
@@ -223,6 +230,7 @@ def main():
         limitations=['One participant; nights were inspected before, so this is retrospective, not prospective.',
             'Watch stages are the reference, not polysomnography; Watch wake labels are sparse.',
             'The movement model is fitted on Watch-motion nights that can postdate a chronological test night; it never saw that night.',
+            'Movement models may have been taught by Watch motion on locked holdout nights; movement_model.py does not apply the holdout yet.',
             'Raw-piezo movement features need a core port before a pod can compute them.',
             'Many arm comparisons on the same nights: read single intervals with multiplicity in mind.',
             'No export, upload or activation performed.'])
