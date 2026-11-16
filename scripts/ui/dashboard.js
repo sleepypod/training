@@ -90,9 +90,13 @@ const glossary = {
     'Vitals lineage',
     'Which vitals engine and processing profile produced a night’s heart rate, breathing rate and HRV on the pod. Mixed means the night was processed by more than one version, for example across a deploy; models trained on mixed nights learn from inputs that changed partway through.',
   ],
+  search: [
+    'Model search',
+    'A search scores every combination of vitals profile, movement model and stage model in a spec on one fixed protocol: walk-forward on development nights, paired per-night differences with a night-bootstrap 95% interval and a sign test. Only the primary comparison was named before the run; the winner and every other comparison are exploratory, because the best of many candidates looks better than it is. Locked holdout nights are never scored here: a search reads them once, from the terminal (search.py final), and those scores stay in that run’s final.json, which this workspace never opens.',
+  ],
   tasks: [
-    'Sleep · Movement · Snore',
-    'The workspace holds three kinds of research run. Sleep runs train and evaluate sleep-stage models. Movement runs compare a movement classifier with the pod’s own movement score. Snore runs record the piezo bandwidth gate and overnight snore-band energy. Each kind keeps its own views; switching task filters the run list. Archive is not a run: it lists the nights copied off the pod.',
+    'Sleep · Movement · Snore · Search',
+    'The workspace holds four kinds of research run. Sleep runs train and evaluate sleep-stage models. Movement runs compare a movement classifier with the pod’s own movement score. Snore runs record the piezo bandwidth gate and overnight snore-band energy. Search runs compare model-graph candidates. Each kind keeps its own views; switching task filters the run list. Archive is not a run: it lists the nights copied off the pod.',
   ],
   cueLabels: [
     'Cue labels',
@@ -552,7 +556,9 @@ async function poll() {
     if (!runId && runs.length && task !== 'archive') {
       const hash = new URLSearchParams(location.hash.slice(1)),
         wanted = hash.get('run') || embedded.initialRun,
-        asked = ['sleep', 'movement', 'snore'].includes(hash.get('task'));
+        asked = ['sleep', 'movement', 'snore', 'search'].includes(
+          hash.get('task'),
+        );
       if (asked) task = hash.get('task');
       const first =
         runs.find((r) => runTask(r) === task) || (!asked && runs[0]);
@@ -2506,13 +2512,13 @@ const taskOf = {
     'snore-session': 'snore',
     'snore-night': 'snore',
     'snore-labels': 'snore',
-    // Model search runs have no view yet (plan B5); this keeps them out of the sleep list.
     search: 'search',
   },
   taskTitle = {
     sleep: 'SLEEP STAGE EXPERIMENT',
     movement: 'MOVEMENT EXPERIMENT',
     snore: 'SNORE RESEARCH',
+    search: 'MODEL SEARCH',
     archive: 'POD ARCHIVE',
   },
   moveClasses = ['still', 'arm', 'leg', 'turn', 'sit', 'light', 'vigorous'],
@@ -2632,25 +2638,27 @@ function renderTaskHeader() {
       ? new Date(r.generatedAt).toLocaleString()
       : null,
     meta =
-      kind === 'movement'
-        ? [
-            `${r.windows ?? '—'} windows`,
-            `${(r.sessions || []).length} session${(r.sessions || []).length === 1 ? '' : 's'}`,
-            r.validation,
-          ]
-        : kind === 'snore-session'
+      kind === 'search'
+        ? searchMeta(r)
+        : kind === 'movement'
           ? [
-              'Bandwidth gate session',
-              'occupant ' + (r.occupantChannels || []).join(', '),
-              (r.channels || []).length + ' channels',
+              `${r.windows ?? '—'} windows`,
+              `${(r.sessions || []).length} session${(r.sessions || []).length === 1 ? '' : 's'}`,
+              r.validation,
             ]
-          : [
-              'Overnight snore-band energy',
-              r.windowSeconds != null
-                ? (r.windowSeconds / 3600).toFixed(1) + ' h'
-                : null,
-              (r.channels || []).join(', '),
-            ];
+          : kind === 'snore-session'
+            ? [
+                'Bandwidth gate session',
+                'occupant ' + (r.occupantChannels || []).join(', '),
+                (r.channels || []).length + ' channels',
+              ]
+            : [
+                'Overnight snore-band energy',
+                r.windowSeconds != null
+                  ? (r.windowSeconds / 3600).toFixed(1) + ' h'
+                  : null,
+                (r.channels || []).join(', '),
+              ];
   $('run-meta').textContent = [...meta, generated && 'generated ' + generated]
     .filter(Boolean)
     .join(' · ');
@@ -2664,6 +2672,7 @@ function renderTask() {
     return;
   }
   if (doc.kind === 'movement') renderMovement(host);
+  else if (doc.kind === 'search') renderSearch(host);
   else if (doc.kind === 'snore-session') renderSnoreSession(host);
   else renderSnoreNight(host);
 }
@@ -3374,7 +3383,9 @@ function taskEmpty() {
         ? 'No movement runs yet'
         : task === 'snore'
           ? 'No snore runs yet'
-          : 'No sleep runs yet',
+          : task === 'search'
+            ? 'No model searches yet'
+            : 'No sleep runs yet',
       'tasks',
     ),
     command = {
@@ -3382,6 +3393,8 @@ function taskEmpty() {
         'uv run --locked python scripts/movement.py session --side left --out data/movement/session-1.json',
       snore:
         'uv run --locked python scripts/piezo_bandwidth.py session --side left --out data/bandwidth/steps.json',
+      search:
+        'uv run --locked python scripts/search.py plan SPEC.json --out data/runs/search-NAME',
       sleep: 'scripts/quickstart.sh',
     }[task];
   host.replaceChildren(p);
@@ -3392,6 +3405,285 @@ function taskEmpty() {
       'Start one from the terminal; it appears here when its report is written.',
     ),
     n('code', command),
+  );
+}
+// ---- Model search (plan B5): report.json only; final.json holds holdout scores and is never read ----
+const searchMetrics = [
+  ['macroF1', 'Macro F1'],
+  ['kappa', 'κ'],
+  ['wakeF1', 'Wake F1'],
+  ['lightF1', 'Light F1'],
+  ['deepF1', 'Deep F1'],
+  ['remF1', 'REM F1'],
+];
+let searchSummaries = {};
+function searchMeta(r) {
+  return [
+    `${r.candidates ?? '—'} candidates`,
+    `${searchDevNights(r)} development nights`,
+    `${r.nights?.lockedExcluded ?? '—'} locked nights excluded`,
+    r.status,
+  ];
+}
+function searchDevNights(r) {
+  const d = r.nights?.development;
+  return Array.isArray(d) ? d.length : (d ?? '—');
+}
+function pooledMetric(p, metric) {
+  if (!p) return null;
+  return metric === 'macroF1' || metric === 'kappa'
+    ? p[metric]
+    : p.f1?.[metric.slice(0, -2)];
+}
+function comparisonText(c) {
+  if (!c) return 'n/a';
+  const [lo, hi] = c.bootstrap95Percent || [];
+  return `${delta(c.meanDifference)} [${delta(lo)}, ${delta(hi)}] · ${c.better}/${c.worse} nights better/worse · sign p=${fmt(c.signTestP)}`;
+}
+// Ranked candidates first, then the pod's live stages; each row is pooled walk-forward scores on development nights.
+function searchRows(r) {
+  const ids = [
+    ...(r.ranking || []),
+    ...Object.keys(r.pooled || {}).filter(
+      (id) => !(r.ranking || []).includes(id),
+    ),
+  ];
+  return ids
+    .filter((id) => r.pooled?.[id])
+    .map((id) => ({
+      id,
+      rank: (r.ranking || []).indexOf(id) + 1 || null,
+      primary:
+        id === r.primary?.candidate
+          ? 'candidate'
+          : id === r.primary?.baseline
+            ? 'baseline'
+            : null,
+      metrics: Object.fromEntries(
+        searchMetrics.map(([m]) => [m, pooledMetric(r.pooled[id], m)]),
+      ),
+      meanNightMacroF1: r.pooled[id].meanNight?.macroF1 ?? null,
+      versus: r.exploratory?.[id]?.macroF1 ?? null,
+    }));
+}
+// One row per search run for the cross-search comparison.
+function searchSummary(run, r) {
+  return [
+    run.name,
+    r.status || '—',
+    String(r.candidates ?? '—'),
+    String(searchDevNights(r)),
+    r.primary
+      ? `${r.primary.candidate} vs ${r.primary.baseline} · ${r.primary.metric || 'macroF1'}`
+      : '—',
+    r.primary ? comparisonText(r.primary.result) : 'not reported yet',
+    r.winner ? `${r.winner.id} (of ${r.winner.candidatesCompared})` : '—',
+  ];
+}
+function searchButtons(runPath) {
+  const row = n('div', null, 'job-submit');
+  if (!jobToken || !runPath) return row;
+  for (const [label, action, params] of [
+    ['Run search', 'search-run', { run: runPath }],
+    ['Report', 'search-report', { run: runPath }],
+  ]) {
+    const b = n('button', label);
+    b.disabled = !!jobState.active;
+    b.onclick = () => searchJob(action, params, row);
+    row.append(b);
+  }
+  return row;
+}
+async function searchJob(action, params, row) {
+  const r = await fetch('/api/jobs', jobRequest(jobToken, { action, params })),
+    body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    row.append(n('span', body.error || 'Could not start the job.', 'negative'));
+    return;
+  }
+  jobId = body.id;
+  $('actions-dialog').showModal();
+  await pollJobs();
+}
+function renderSearch(host) {
+  const r = doc.taskReport,
+    out = [],
+    scored = r.status === 'scored' || r.status === 'final';
+  const head = panel(r.name || 'Model search', 'search');
+  head.append(
+    n(
+      'p',
+      scored
+        ? `${r.candidates} candidates scored walk-forward on ${searchDevNights(r)} development nights; ${r.nights?.lockedExcluded ?? 0} locked holdout nights excluded.`
+        : r.status === 'blocked'
+          ? 'Planned, but blocked: a node needs inputs or a cache first. The plan output lists the commands; plan again into a new folder afterwards.'
+          : `Planned: ${r.candidates ?? '—'} candidates on ${searchDevNights(r)} development nights. Run it, then report.`,
+    ),
+    searchButtons(doc.runPath),
+  );
+  out.push(head);
+  if (scored) {
+    const q = r.primary || {},
+      primary = panel('Primary comparison · pre-registered', 'search');
+    primary.append(
+      n(
+        'p',
+        `${q.candidate} vs ${q.baseline}, ${q.metric || 'macroF1'}, paired per night (candidate − baseline):`,
+      ),
+      n('strong', comparisonText(q.result), 'mono'),
+      n(
+        'p',
+        `Exploratory winner: ${r.winner?.id} of ${r.winner?.candidatesCompared} candidates compared. ${r.winner?.note || ''}`,
+        'footnote',
+      ),
+    );
+    out.push(primary);
+    const ranking = panel('Candidates', 'macroF1'),
+      t = n('table'),
+      rows = searchRows(r);
+    table(
+      t,
+      [
+        '#',
+        'Candidate',
+        ...searchMetrics.map(([, label]) => label),
+        'Mean night F1',
+        'vs baseline · macro F1 (exploratory)',
+      ],
+      rows.map((row) => [
+        row.rank ? String(row.rank) : '—',
+        row.id + (row.primary ? ` (${row.primary})` : ''),
+        ...searchMetrics.map(([m]) => fmt(row.metrics[m])),
+        fmt(row.meanNightMacroF1),
+        row.primary ? '—' : comparisonText(row.versus),
+      ]),
+    );
+    const scroll = n('div', null, 'table-scroll');
+    scroll.append(t);
+    ranking.append(
+      scroll,
+      n(
+        'p',
+        'Pooled walk-forward scores on development nights. Locked holdout nights are never in these numbers.',
+        'footnote',
+      ),
+    );
+    out.push(ranking);
+    const vitals = Object.entries(r.layers?.vitals || {}),
+      movement = Object.entries(r.layers?.movementModel || {});
+    if (vitals.length || movement.length) {
+      const layers = panel('Layer scores', 'search');
+      if (vitals.length) {
+        const tv = n('table');
+        table(
+          tv,
+          [
+            'Vitals',
+            'Kind',
+            'HR MAE',
+            'BR MAE',
+            'HRV ρ',
+            'HR MAE reduction',
+            'BR MAE reduction',
+          ],
+          vitals.map(([id, v]) => [
+            id,
+            v.kind,
+            fmt(v.heartRate?.mae, 2),
+            fmt(v.breathingRate?.mae, 2),
+            fmt(v.hrv?.spearman, 2),
+            comparisonText(v.versus?.hrMaeReduction),
+            comparisonText(v.versus?.brMaeReduction),
+          ]),
+        );
+        const sv = n('div', null, 'table-scroll');
+        sv.append(tv);
+        layers.append(sv);
+      }
+      if (movement.length) {
+        const tm = n('table');
+        table(
+          tm,
+          [
+            'Movement model',
+            'Strict moving recall',
+            'Still false alarms',
+            'Pod score recall',
+            'Locked teaching nights',
+          ],
+          movement.map(([id, m]) => [
+            id,
+            fmt(m.modelStrict?.movingRecall, 2),
+            fmt(m.modelStrict?.stillFalseAlarm, 3),
+            fmt(m.podScore?.movingRecall, 2),
+            String((m.lockedTeachingNights || []).length),
+          ]),
+        );
+        const sm = n('div', null, 'table-scroll');
+        sm.append(tm);
+        layers.append(sm);
+      }
+      out.push(layers);
+    }
+  }
+  const holdout = panel('Locked holdout', 'holdout');
+  holdout.append(
+    n(
+      'p',
+      `Holdout reads so far, across every run: ${r.holdout?.readsSoFar ?? '—'}. ${r.holdout?.finalRead ? 'This search has had its one final read; its scores stay in the terminal and final.json, not here.' : 'This search has not read the holdout. The final read is a deliberate terminal step (search.py final), not an action here.'}`,
+    ),
+  );
+  out.push(holdout);
+  const excluded = Object.entries(r.nights?.excludedSessions || {});
+  if (excluded.length || (r.limitations || []).length) {
+    const notes = panel('Exclusions and limitations', 'search');
+    if (excluded.length) {
+      const te = n('table');
+      table(te, ['Excluded session', 'Reason'], excluded);
+      const se = n('div', null, 'table-scroll');
+      se.append(te);
+      notes.append(se);
+    }
+    for (const line of r.limitations || [])
+      notes.append(n('p', line, 'footnote'));
+    out.push(notes);
+  }
+  const others = runs.filter((run) => run.kind === 'search');
+  if (others.length > 1) {
+    const compare = panel('All searches', 'search'),
+      tc = n('table');
+    compare.append(tc);
+    out.push(compare);
+    loadSearchSummaries(others).then(() =>
+      table(
+        tc,
+        [
+          'Search',
+          'Status',
+          'Candidates',
+          'Dev nights',
+          'Primary',
+          'Primary result',
+          'Winner (exploratory)',
+        ],
+        others.map((run) =>
+          searchSummaries[run.id]
+            ? searchSummary(run, searchSummaries[run.id])
+            : [run.name, '—', '—', '—', '—', 'unavailable', '—'],
+        ),
+      ),
+    );
+  }
+  host.append(...out);
+}
+async function loadSearchSummaries(list) {
+  await Promise.all(
+    list.map(async (run) => {
+      try {
+        const r = await fetch('/api/runs/' + run.id, { cache: 'no-store' });
+        if (r.ok) searchSummaries[run.id] = (await r.json()).taskReport || {};
+      } catch {}
+    }),
   );
 }
 // ---- Pod archive (plan B2): nights in data/archive/<podId>/index.json ----

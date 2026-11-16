@@ -146,8 +146,8 @@ to have passed parity.
 
 **Actions** (bottom of the sidebar) runs the repository's own scripts from the
 workspace: `train.py --snapshot`, `stage-backtest.py`, `fusion.py`,
-`vitals_reference.py`, `movement_model.py train` and `epochs`, `archive_index.py`, and the
-archive pull that `scripts/install-archive-agent.sh` schedules (core's read-only
+`vitals_reference.py`, `movement_model.py train` and `epochs`, `archive_index.py`,
+`search.py plan`, `run` and `report`, and the archive pull that `scripts/install-archive-agent.sh` schedules (core's read-only
 `biometrics:archive pull`, resolved by that script's `--print-command` from
 `data/workspace-settings.json`). One job runs at a time; starting another while one
 runs is refused (HTTP 409) rather than queued, so a job never starts on inputs that
@@ -165,6 +165,16 @@ on 127.0.0.1, and requires the random token embedded in that launch's page as an
 `X-Training-Token` header. Requests with another Host, a cross-site `Origin` or
 `Sec-Fetch-Site`, or a non-JSON body are refused, and every page is served only to
 the `127.0.0.1` and `localhost` host names, so a rebound DNS name cannot read the token.
+
+**Search** in the sidebar lists model searches (`scripts/search.py`, kind `search`). A
+search shows its pre-registered primary comparison with the night-bootstrap interval and
+sign test, every candidate's pooled walk-forward scores on development nights, the
+exploratory comparisons against the baseline, layer scores, exclusions and limitations,
+and, with more than one search, a table comparing their primary results and winners. The
+view reads only each run's `report.json`. A search's `final` reads the locked holdout once
+and exports `model/set.json`. It is not a workspace action, and `final.json`, where its
+scores live, is never read or served; the view shows only how many holdout reads there
+have been.
 
 A **Sleep / Movement / Snore** switch at the top of the sidebar picks the kind of
 research run; the run list shows only that kind. Movement runs (`scripts/movement.py

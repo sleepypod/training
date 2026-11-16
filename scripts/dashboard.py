@@ -68,7 +68,9 @@ def task_payload(root, key, kind, catalog=None):
         windows = [{k: w.get(k) for k in MOVEMENT_WINDOW_FIELDS} for w in windows]
     return {'id': key, 'name': root.name, 'kind': kind, 'state': {'status': 'complete'},
             'config': read_json(root / 'run.json', {}), 'taskReport': report, 'windows': windows,
-            'reference': snore_reference(report, catalog) if kind == 'snore-night' else None}
+            'reference': snore_reference(report, catalog) if kind == 'snore-night' else None,
+            # Search actions take the run folder; final.json beside it is never read.
+            'runPath': str(root) if kind == 'search' else None}
 
 
 def payload(output, key=None, catalog=None):

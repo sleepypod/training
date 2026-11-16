@@ -251,6 +251,14 @@ class ValidationTests(unittest.TestCase):
         (self.fixture.data / 'archive/pod-a').mkdir(parents=True)
         self.assertEqual(self.runner.command('archive-index', {'archive': 'data/archive/pod-a', 'timezone': 'UTC'})[0][4:],
                          ['scripts/archive_index.py', f'--archive={self.fixture.data}/archive/pod-a', '--timezone=UTC'])
+        (self.fixture.data / 'runs/search-a').mkdir(parents=True)
+        self.refuse('search-run', {'run': 'data/runs/search-a'}, 'no plan.json')
+        (self.fixture.data / 'runs/search-a/plan.json').write_text('{}')
+        argv, cwd, values, output, env = self.runner.command('search-run', {'run': 'data/runs/search-a'})
+        self.assertEqual(argv[4:], ['scripts/search.py', 'run', f'{self.fixture.data}/runs/search-a', '--jobs=2'])
+        self.assertEqual(output, f'{self.fixture.data}/runs/search-a', 'a finished run is linked into the run list')
+        self.assertEqual(self.runner.command('search-plan', {'spec': 'data/watch.json', 'out': 'data/runs/search-b'})[0][4:],
+                         ['scripts/search.py', 'plan', f'{self.fixture.data}/watch.json', f'--out={self.fixture.data}/runs/search-b'])
         argv = self.runner.command('movement-model-epochs', epochs)[0]
         self.assertEqual(argv[4:7], ['scripts/movement_model.py', 'epochs', str(self.fixture.data / 'features.json')])
         self.assertIn(f'--export=12={self.fixture.data}/session.tar.gz', argv)
@@ -291,10 +299,33 @@ class ValidationTests(unittest.TestCase):
                       f"--dest '{data / 'archive'}' --curl", plist)
 
 
+class SearchViewTests(unittest.TestCase):
+    def test_search_run_payload_never_carries_holdout_scores(self):
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        run = fixture.data / 'runs' / 'search-a'
+        run.mkdir(parents=True)
+        (run / 'report.json').write_text(json.dumps({'kind': 'search', 'status': 'final', 'name': 'a', 'candidates': 2,
+                                                     'holdout': {'readsSoFar': 1, 'finalRead': True}}))
+        (run / 'final.json').write_text(json.dumps({'pooled': {'macroF1': 0.123456789}}))
+        key = fixture.catalog.register(run)
+        server = serve(catalog=fixture.catalog)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=10)
+        for path in (f'/api/runs/{key}', f'/api/runs/{key}/report', '/api/runs'):
+            connection.request('GET', path)
+            text = connection.getresponse().read().decode()
+            self.assertNotIn('0.123456789', text, path)
+        connection.request('GET', f'/api/runs/{key}')
+        doc = json.loads(connection.getresponse().read())
+        self.assertEqual((doc['kind'], doc['runPath']), ('search', str(run)))
+
+
 class NoPodWritesTests(unittest.TestCase):
     """AGENTS.md: uploads, model selection or activation, and pod writes stay manual."""
     SCRIPTS = {'scripts/train.py', 'scripts/stage-backtest.py', 'scripts/fusion.py', 'scripts/vitals_reference.py',
-               'scripts/movement_model.py', 'scripts/archive_index.py'}
+               'scripts/movement_model.py', 'scripts/archive_index.py', 'scripts/search.py'}
     WRITES = re.compile(r'sleep-stages/model|watch-upload|/api/device|/api/settings|/api/schedules|'
                         r"method\s*=\s*['\"](PUT|POST|PATCH|DELETE)|['\"]-X['\"]|--request", re.I)
     # Reads: GETs of the model library and selection (archive_index.py --stage-models help), and the preview route Pod.post is limited to.
@@ -304,11 +335,14 @@ class NoPodWritesTests(unittest.TestCase):
 
     def test_action_allow_list_is_fixed(self):
         self.assertEqual(set(ACTIONS), {'train', 'stage-backtest', 'fusion', 'vitals-reference', 'movement-model-train',
-                                        'movement-model-epochs', 'archive-pull', 'archive-index'})
+                                        'movement-model-epochs', 'archive-pull', 'archive-index',
+                                        'search-plan', 'search-run', 'search-report'})
         for key, action in ACTIONS.items():
             self.assertNotRegex(key + action['label'], re.compile('upload|activat|select|promot|deploy', re.I))
             flags = {f['flag'] for f in action['fields']}
-            self.assertFalse(flags & {'--pod', '--holdout-final', '--dashboard'}, key)
+            self.assertFalse(flags & {'--pod', '--holdout-final', '--dashboard', '--candidate', '--access-log'}, key)
+            # search.py final reads the locked holdout and exports model/set.json: never a workspace action.
+            self.assertNotIn('final', action.get('argv', []), key)
             if 'build' not in action:
                 self.assertEqual(action['argv'][:4], ['uv', 'run', '--locked', 'python'])
                 self.assertIn(action['argv'][4], self.SCRIPTS)

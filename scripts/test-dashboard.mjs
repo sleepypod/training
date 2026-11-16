@@ -24,7 +24,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   script +
-    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,jobRequest,jobParams,tailText,jobIndicator,jobElapsed,vitalsLabel,watchCell,archiveNights,archiveSummary,teacherCoverage,lineageCounts,pullAge,rawSource,nightNote,setDoc:value=>{doc=value}}',
+    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,jobRequest,jobParams,tailText,jobIndicator,jobElapsed,vitalsLabel,watchCell,archiveNights,archiveSummary,teacherCoverage,lineageCounts,pullAge,rawSource,nightNote,searchRows,searchSummary,comparisonText,searchMeta,renderSearch,setDoc:value=>{doc=value}}',
   context,
 );
 const {
@@ -491,4 +491,45 @@ test('archive cells mirror the CLI table', () => {
   assert.equal(api.pullAge(0.2), 'under an hour ago');
   assert.equal(api.pullAge(5.4), '5 h ago');
   assert.equal(api.pullAge(80), '3.3 days ago');
+});
+const searchReport = {
+  kind: 'search', status: 'scored', name: 'synthetic', candidates: 2,
+  nights: { development: ['2026-11-03', '2026-11-04'], lockedExcluded: 1, excludedSessions: { 12: 'no raw export' } },
+  pooled: {
+    'a+none+podContext': { macroF1: 0.61, kappa: 0.4, f1: { wake: 0.5, light: 0.7, deep: 0.6, rem: 0.62 }, meanNight: { macroF1: 0.6 } },
+    'b+none+podContext': { macroF1: 0.65, kappa: 0.45, f1: { wake: 0.55, light: 0.72, deep: 0.63, rem: 0.66 }, meanNight: { macroF1: 0.64 } },
+    pod_live: { macroF1: 0.5, kappa: 0.3, f1: { wake: 0.4, light: 0.6, deep: 0.5, rem: 0.5 }, meanNight: { macroF1: 0.49 } },
+  },
+  ranking: ['b+none+podContext', 'a+none+podContext'],
+  winner: { id: 'b+none+podContext', candidatesCompared: 2, note: 'exploratory' },
+  primary: { candidate: 'b+none+podContext', baseline: 'a+none+podContext', metric: 'macroF1', preregistered: true,
+    result: { nights: 2, meanDifference: 0.04, bootstrap95Percent: [0.01, 0.07], better: 2, worse: 0, signTestP: 0.5 } },
+  exploratory: { pod_live: { macroF1: { meanDifference: -0.11, bootstrap95Percent: [-0.2, -0.02], better: 0, worse: 2, signTestP: 0.5 } } },
+  layers: { vitals: {}, movementModel: {} },
+  holdout: { rule: 'every fourth', readsSoFar: 3, finalRead: false },
+  limitations: ['One participant.'],
+};
+test('search rows rank candidates, then the pod, with the primary pair marked', () => {
+  const rows = plain(context.testAPI.searchRows(searchReport));
+  assert.deepEqual(rows.map((r) => [r.id, r.rank, r.primary]), [
+    ['b+none+podContext', 1, 'candidate'], ['a+none+podContext', 2, 'baseline'], ['pod_live', null, null]]);
+  assert.equal(rows[0].metrics.wakeF1, 0.55);
+  assert.equal(rows[2].versus.meanDifference, -0.11);
+  assert.equal(context.testAPI.comparisonText(searchReport.primary.result), '+0.040 [+0.010, +0.070] · 2/0 nights better/worse · sign p=0.500');
+  assert.equal(context.testAPI.comparisonText(null), 'n/a');
+  assert.deepEqual(plain(context.testAPI.searchMeta(searchReport)), ['2 candidates', '2 development nights', '1 locked nights excluded', 'scored']);
+  assert.deepEqual(plain(context.testAPI.searchSummary({ name: 'synthetic' }, { status: 'ready', candidates: 4, nights: { development: 10 } })),
+    ['synthetic', 'ready', '4', '10', '—', 'not reported yet', '—']);
+});
+test('the search view renders development scores and holdout counts, never a final score', () => {
+  const allText = (e) => [e.textContent, ...(e.children || []).map(allText)].join(' ');
+  for (const status of ['scored', 'final', 'ready', 'blocked']) {
+    context.testAPI.setDoc({ kind: 'search', taskReport: { ...searchReport, status, final: { pooled: { macroF1: 0.987654 } } } });
+    const host = element('div');
+    context.testAPI.renderSearch(host);
+    const text = allText(host);
+    assert.doesNotMatch(text, /0\.98765|undefined|NaN/);
+    assert.match(text, /Holdout reads so far, across every run: 3/);
+    if (status === 'scored') assert.match(text, /\+0\.040 \[\+0\.010, \+0\.070\]/);
+  }
 });

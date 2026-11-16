@@ -135,6 +135,28 @@ ACTIONS = {
                    field('workers', 'int', 'Workers', '--workers', min=1, max=16, default=4),
                    field('out', 'out-file', 'Output file (new)', '--out', prefix='movement-epochs', placeholder='data/runs/movement-epochs-<time>.json')],
     },
+    'search-plan': {
+        'label': 'Plan a model search',
+        'description': 'scripts/search.py plan: expands a spec into candidates, prepares and checks inputs and caches, and prints the cost. Locked holdout nights are dropped. Search never contacts the pod or uploads anything.',
+        'argv': script('scripts/search.py', 'plan'),
+        'fields': [field('spec', 'file', 'Search spec', placeholder='data/search/SPEC.json', required=True),
+                   field('out', 'out-dir', 'Search run folder (new)', '--out', prefix='search', placeholder='data/runs/search-<time>'),
+                   field('cache', 'dir', 'Node cache', '--cache', placeholder='data/cache')],
+    },
+    # A search's `final` reads the locked holdout once and exports model/set.json; it stays a deliberate terminal step.
+    'search-run': {
+        'label': 'Run a planned model search',
+        'description': 'scripts/search.py run: scores every candidate walk-forward on development nights only.',
+        'argv': script('scripts/search.py', 'run'),
+        'fields': [field('run', 'search-run', 'Search run folder', placeholder='data/runs/search-NAME', required=True),
+                   field('jobs', 'int', 'Parallel candidates', '--jobs', min=1, max=16, default=2)],
+    },
+    'search-report': {
+        'label': 'Report a model search',
+        'description': 'scripts/search.py report: ranking, layer scores and the pre-registered comparison on development nights, written to report.json. Holdout scores never appear in it.',
+        'argv': script('scripts/search.py', 'report'),
+        'fields': [field('run', 'search-run', 'Search run folder', placeholder='data/runs/search-NAME', required=True)],
+    },
     'archive-pull': {
         'label': 'Pull the pod archive now',
         'description': 'Core’s read-only biometrics archive pull into data/archive, the command the nightly agent from scripts/install-archive-agent.sh runs. Pod and core checkout come from data/workspace-settings.json.',
@@ -186,10 +208,12 @@ class JobRunner:
             if not path.is_file():
                 raise JobError(400, f'{label}: {path} is not a file')
             return str(path)
-        if kind == 'dir':
+        if kind in ('dir', 'search-run'):
             path = self.path(raw, label)
             if not path.is_dir():
                 raise JobError(400, f'{label}: {path} is not a folder')
+            if kind == 'search-run' and not (path / 'plan.json').is_file():
+                raise JobError(400, f'{label}: {path} has no plan.json; plan the search first')
             return str(path)
         if kind == 'files':
             items = raw if isinstance(raw, list) else None
@@ -282,7 +306,7 @@ class JobRunner:
             for item in value if isinstance(value, list) else [value]:
                 # --flag=value keeps a value that starts with '-' from being read as an option.
                 argv.append(str(item) if f['flag'] is None else f'{f["flag"]}={item}')
-        output = next((values[f['name']] for f in spec['fields'] if f['type'] in ('out-dir', 'out-file')), None)
+        output = next((values[f['name']] for f in spec['fields'] if f['type'] in ('out-dir', 'out-file', 'search-run')), None)
         return argv, self.root.resolve(), values, output, {}
 
     def busy(self):
