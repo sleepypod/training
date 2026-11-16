@@ -8,6 +8,7 @@
   "scripts": {
     "features": "tsx scripts/export-runtime-features.ts",
     "parity": "tsx scripts/verify-portable.ts",
+    "movement-parity": "tsx scripts/verify-movement.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

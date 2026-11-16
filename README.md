@@ -302,6 +302,9 @@ uv run --locked python scripts/vitals_reference.py data/runs/RUN/features.json \
 uv run --locked python scripts/movement_model.py train --windows data/runs/movement-001/windows.json --out data/runs/movement-model
 uv run --locked python scripts/movement_model.py epochs data/runs/RUN/features.json --snapshot data/biometrics.db \
   --model data/runs/movement-model/model.joblib --export SESSION_ID=data/raw/session.tar.gz --out data/runs/movement-epochs.json
+# Portable forest for the pod from an existing model.joblib (train writes model/movement.json itself), checked in TypeScript
+uv run --locked python scripts/movement_model.py export data/runs/movement-model/model.joblib --out data/runs/movement-model/model/movement.json
+npm run movement-parity -- data/runs/movement-model/model/movement.json
 # Stage model with pod features, HR quality and movement-model features
 uv run --locked python scripts/fusion.py data/runs/RUN/features.json --snapshot data/biometrics.db \
   --movement-epochs data/runs/movement-epochs.json --pod-model-trained-through 2026-11-03 --out data/runs/fusion
@@ -323,6 +326,15 @@ per other Watch-motion night T by a model also fitted without T. `model.joblib` 
 teaching windows so these models can be refitted; one trained by an earlier version is refused.
 Moving windows are those strictly above the strict threshold, so tied probabilities at the
 cutoff never count as moving. Raw-piezo features need a core port before a pod can compute them.
+
+`train` also writes `model/movement.json`, the final model as a portable forest
+(`movement-model-v1`, contract `movementRaw-v1`) with up to 64 test vectors and a SHA-256 of
+its canonical body. Its trees use the stage-model arrays plus float32 inputs and the routing of a
+missing pod score, so it reproduces scikit-learn exactly. The file is refused unless it matches
+`predict_proba` within 1e-9 on every training window, with and without the pod score. `export`
+writes it from an existing `model.joblib`; one saved before teaching windows needs the `--windows`
+it was trained on. The [movementRaw-v1 contract](knowledge/data/movement-raw-v1.md) defines every
+input for the core port. A 200-tree model is about 9 MB of JSON. Nothing is uploaded.
 
 `fusion.py` evaluates the frozen ablation forest on the nights that have raw exports:
 `base` (podNative), `all` (the podContext columns), `all` plus HR quality, plus

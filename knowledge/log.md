@@ -2,6 +2,7 @@
 
 ## 2026-11-15
 
+- **Creation**: Documented the [movement model contract](data/movement-raw-v1.md) `movementRaw-v1` for the pod port: window features, the pod-score minute rule, strict threshold, float32 and missing-value routing, hash and test vectors, and the exported size. No model upload or activation.
 - **Creation**: Captured the [cross-fitted fusion rerun](evaluation/fusion-cross-fitted-2026-11-15.md) after fixing the movement-teacher leak; conclusions unchanged. No model activation.
 
 ## 2026-11-04
