@@ -22,7 +22,13 @@ const reference = watch.stages.filter(r => stages.includes(r[2]))
 const config = db.prepare('select payload from biometric_runtime_configs where side = ? order by generation desc limit 1').get(side) as { payload: string } | undefined
 const ruleset = config ? JSON.parse(config.payload).resolved.sleep_stages.ruleset : DEFAULT_STAGE_RULESET
 const quality = (db.prepare('select quality_score q from calibration_profiles where side=? and sensor_type=\'piezo\' limit 1').get(side) as { q: number } | undefined)?.q ?? 0
-const records = db.prepare('select id, entered_bed_at s, left_bed_at e from sleep_records where side=? and left_bed_at-entered_bed_at between 10800 and 50400 order by entered_bed_at').all(side) as { id: number, s: number, e: number }[]
+// The off-pod archive never deletes, so a record edited on the pod is two rows: same side and created_at, overlapping, the
+// edited copy with the later archive id. Train on the newest copy only (lineage.py NEWER_COPY); a pod snapshot has one copy.
+const recordColumns = (db.prepare('select name from pragma_table_info(\'sleep_records\')').all() as { name: string }[]).map(c => c.name)
+const newestCopy = recordColumns.includes('created_at')
+  ? ' and not exists (select 1 from sleep_records n where n.side = r.side and n.created_at = r.created_at and n.id > r.id and n.entered_bed_at < r.left_bed_at and n.left_bed_at > r.entered_bed_at)'
+  : ''
+const records = db.prepare(`select id, entered_bed_at s, left_bed_at e from sleep_records r where side=? and left_bed_at-entered_bed_at between 10800 and 50400${newestCopy} order by entered_bed_at`).all(side) as { id: number, s: number, e: number }[]
 const podPath = join(dirname(snapshot), 'pod-stages.json')
 const podStages = existsSync(podPath) ? JSON.parse(readFileSync(podPath, 'utf8')) as { sessions: Record<string, { start: number, duration: number, stage: string }[]> } : null
 const nights = []

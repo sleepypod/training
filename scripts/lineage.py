@@ -154,6 +154,35 @@ def sleep_records(db, side=None):
     return [(i, s, int(a), int(b)) for i, s, a, b in rows]
 
 
+# The archive never deletes, so a record edited on the pod stays as two rows: the old copy keeps its
+# id and the edited one gets a later archive id (merge.ts `state` on side, entered_bed_at, left_bed_at).
+# Copies share the side and created_at (written once by the sleep detector) and overlap.
+# export-runtime-features.ts applies the same predicate when it selects training sessions.
+NEWER_COPY = ('n.side = r.side and n.created_at = r.created_at and n.id > r.id '
+              'and n.entered_bed_at < r.left_bed_at and n.left_bed_at > r.entered_bed_at')
+
+
+def superseded(db):
+    """{sleep record id: id of its newest copy} for records the pod edited after the archive saw them."""
+    if 'created_at' not in columns(db, 'sleep_records'):
+        return {}
+    return dict(db.execute(f'select r.id, max(n.id) from sleep_records r join sleep_records n on {NEWER_COPY} group by r.id'))
+
+
+def overlaps(records):
+    """{id: [ids of other same-side records whose in-bed windows overlap]}."""
+    out = {}
+    ordered = sorted(records, key=lambda r: r[2])
+    for i, (a, side, start, end) in enumerate(ordered):
+        for b, other, other_start, other_end in ordered[i + 1:]:
+            if other_start >= end:
+                break
+            if other == side and other_end > start:
+                out.setdefault(a, []).append(b)
+                out.setdefault(b, []).append(a)
+    return {k: sorted(v) for k, v in out.items()}
+
+
 def parse_stage_models(values):
     out = {}
     for value in values or []:
