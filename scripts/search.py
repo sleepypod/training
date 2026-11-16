@@ -38,6 +38,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import canonical_json as cj
 import derive_snapshot as ds
 import holdout as ho
 import modelset as ms
@@ -208,11 +209,11 @@ def profile_overrides(config):
 
 def resolve_config(choice, vcache):
     """(engine, profile) of a vitals choice given as a profile file, from cached replays of the same overrides."""
-    overrides = ms.canonical_json(profile_overrides(choice['config']))
+    overrides = cj.canonical_json(profile_overrides(choice['config']))
     found = set()
     for source in Path(vcache).glob('*.source.json'):
         record = read_json(source)
-        if record.get('overrides') is not None and ms.canonical_json(record['overrides']) == overrides and choice.get('engine') in (None, record['engine']):
+        if record.get('overrides') is not None and cj.canonical_json(record['overrides']) == overrides and choice.get('engine') in (None, record['engine']):
             found.add((record['engine'], record['profile']))
     if len(found) > 1:
         raise ValueError(f"vitals {choice['id']}: cached replays of {choice['config']} under several engines; name the engine")
@@ -776,7 +777,7 @@ def final(run_dir, candidate_id, access_log=None):
                 subprocess.run([str(tsx), str(ROOT / 'scripts/verify-portable.ts'), str(model_dir)], check=True)
             exported = model
     if exported:
-        model_sha = ms.stage_sha256(exported)
+        model_sha = cj.stage_sha256(exported)
     else:
         import joblib
         joblib.dump(clf, model_dir / 'candidate.joblib')
