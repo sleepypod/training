@@ -432,7 +432,11 @@ teachers per type, vitals lineage, whether the night is in the locked holdout, a
 its raw is at risk (only on the pod, within 3 days of the pod's oldest raw). At-risk nights
 print first. `--storage` is a saved `GET /api/system/storage`; without it the oldest raw is
 estimated from the first pull. Decoded coverage is cached by RAW SHA-256 in
-`data/cache/raw-coverage/`.
+`data/cache/raw-coverage/`. The archive never deletes, so a sleep record edited on the pod
+stays as two rows; the index marks the old copy `supersededBy` the newest one, and
+`export-runtime-features.ts` trains on the newest copy only. `overlaps` lists other records
+on the same side that share in-bed time. A record deleted on the pod stays in the archive and
+can't be told apart.
 
 `lineage.py` reports which vitals engine and profile produced each night's stored vitals,
 with core's identity: each row's live processing run (manifest hash and config hash). A night
