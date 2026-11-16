@@ -24,7 +24,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   script +
-    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,setDoc:value=>{doc=value}}',
+    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,jobRequest,jobParams,tailText,jobIndicator,jobElapsed,setDoc:value=>{doc=value}}',
   context,
 );
 const {
@@ -404,4 +404,45 @@ test('night cards show a locked night without its hypnogram', () => {
     find = (e, tag) => e.tag === tag || (e.children || []).some((c) => find(c, tag));
   assert.match(allText(panel), /Locked holdout/);
   assert.ok(!find(panel, 'svg'));
+});
+test('job requests carry the launch token, and only POSTs send a JSON body', () => {
+  const { jobRequest } = context.testAPI;
+  assert.deepEqual(plain(jobRequest('t0k')), { cache: 'no-store', headers: { 'X-Training-Token': 't0k' } });
+  const post = plain(jobRequest('t0k', { action: 'train', params: {} }));
+  assert.equal(post.method, 'POST');
+  assert.equal(post.headers['Content-Type'], 'application/json');
+  assert.equal(post.headers['X-Training-Token'], 't0k');
+  assert.deepEqual(JSON.parse(post.body), { action: 'train', params: {} });
+});
+test('job form values become typed parameters; blanks fall back to server defaults', () => {
+  const action = { fields: [
+    { name: 'features', type: 'file' }, { name: 'out', type: 'out-dir' }, { name: 'workers', type: 'int' },
+    { name: 'exports', type: 'exports' }, { name: 'notes', type: 'text' }, { name: 'bad', type: 'int' },
+  ] };
+  assert.deepEqual(plain(context.testAPI.jobParams(action, {
+    features: ' data/features.json ', out: '  ', workers: '4', exports: '1=data/a.tar.gz\n\n 2=data/b.tar.gz ',
+    notes: 'why', bad: '2.5',
+  })), { features: 'data/features.json', workers: 4, exports: ['1=data/a.tar.gz', '2=data/b.tar.gz'], notes: 'why', bad: '2.5' });
+});
+test('log tail appends chunks and trims whole lines past the limit', () => {
+  const { tailText } = context.testAPI;
+  assert.equal(tailText('a\n', 'b\n'), 'a\nb\n');
+  assert.equal(tailText('first line\nsecond\n', 'third\n', 12), 'third\n');
+  assert.equal(tailText('', 'x'.repeat(20), 5), 'xxxxx');
+});
+test('job indicator names the running job, else the last status', () => {
+  const { jobIndicator, jobElapsed } = context.testAPI;
+  const jobs = [{ id: 'b', label: 'Fusion arms', status: 'running', startedAt: 100 }, { id: 'a', label: 'Train', status: 'complete' }];
+  assert.equal(jobIndicator({ jobs, active: 'b' }), 'Running · Fusion arms');
+  assert.equal(jobIndicator({ jobs: jobs.slice(1), active: null }), 'Last job complete');
+  assert.equal(jobIndicator({ jobs: [], active: null }), '');
+  assert.equal(jobElapsed(jobs[0], 190), '1m 30s');
+  assert.equal(jobElapsed({ startedAt: 100, finishedAt: 105 }, 999), '5s');
+  assert.equal(jobElapsed(jobs[1]), '—');
+});
+test('the workspace script never calls pod model or device routes', () => {
+  const source = readFileSync(new URL('./ui/dashboard.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /sleep-stages\/model|watch-upload|\/api\/device|method: '(PUT|DELETE|PATCH)'/);
+  assert.deepEqual([...source.matchAll(/fetch\(\s*'([^']+)'/g)].map((m) => m[1]).filter((u) => !u.startsWith('/api/runs')),
+    ['/api/jobs/', '/api/jobs', '/api/jobs', '/api/jobs/']);
 });

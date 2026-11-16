@@ -74,6 +74,10 @@ const glossary = {
     'Epoch & hypnogram',
     'An epoch is a five-minute interval represented by one feature row. A hypnogram is a stepped sleep-stage chart over time, ordered Wake, REM, Light, Deep. Gaps stay empty when readings or labels are unavailable. Watch and pod outputs are sampled at interval midpoints, so these plots do not reproduce finer stage boundaries.',
   ],
+  actions: [
+    'Actions · jobs',
+    'Actions run this repository’s own training and evaluation scripts on files already in data/, one job at a time, the same way the terminal would. Each job keeps its exact command and log in data/web-jobs and is listed with its status; a job that writes a run adds it to the run list. No action uploads, selects or activates a model, or writes to the pod: those steps stay manual. Closing the workspace interrupts a running job.',
+  ],
   tasks: [
     'Sleep · Movement · Snore',
     'The workspace holds three kinds of research run. Sleep runs train and evaluate sleep-stage models. Movement runs compare a movement classifier with the pod’s own movement score. Snore runs record the piezo bandwidth gate and overnight snore-band energy. Each kind keeps its own views; switching task filters the run list.',
@@ -3373,6 +3377,228 @@ function taskEmpty() {
     n('code', command),
   );
 }
+// ---- Actions: allow-listed jobs run by the live workspace ----
+const jobToken = embedded.jobToken || null;
+let jobState = { actions: [], jobs: [], active: null },
+  jobId = null,
+  jobLog = { id: null, offset: null, text: '', done: false },
+  jobForm = null,
+  jobBusy = false;
+// Every jobs request carries this launch's token; the server refuses requests without it.
+function jobRequest(token, body) {
+  const init = { cache: 'no-store', headers: { 'X-Training-Token': token } };
+  if (body !== undefined) {
+    init.method = 'POST';
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  }
+  return init;
+}
+// Form strings to typed parameters; empty fields are left to the server's defaults.
+function jobParams(action, values) {
+  const params = {};
+  for (const f of action.fields) {
+    const raw = String(values[f.name] ?? '').trim();
+    if (!raw) continue;
+    if (f.type === 'files' || f.type === 'exports')
+      params[f.name] = raw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    else if (f.type === 'int')
+      params[f.name] = /^-?\d+$/.test(raw) ? Number(raw) : raw;
+    else params[f.name] = raw;
+  }
+  return params;
+}
+// Appends a log chunk, keeping about the last `limit` characters from a line start.
+function tailText(text, chunk, limit = 200000) {
+  const all = text + chunk;
+  if (all.length <= limit) return all;
+  const cut = all.indexOf('\n', all.length - limit);
+  return cut < 0 ? all.slice(-limit) : all.slice(cut + 1);
+}
+function jobElapsed(job, now = Date.now() / 1000) {
+  return job.startedAt == null
+    ? '—'
+    : duration((job.finishedAt ?? now) - job.startedAt);
+}
+function jobIndicator(state) {
+  const active = state.jobs.find((j) => j.id === state.active),
+    last = state.jobs[0];
+  return active
+    ? 'Running · ' + active.label
+    : last
+      ? 'Last job ' + last.status
+      : '';
+}
+function renderJobFields() {
+  const action = jobState.actions.find((a) => a.id === $('job-action').value);
+  jobForm = action?.id ?? null;
+  $('job-error').textContent = '';
+  $('job-description').replaceChildren();
+  $('job-fields').replaceChildren();
+  if (!action) return;
+  // Inside the form, a help button must not submit it.
+  const explain = help('action:' + action.id);
+  explain.type = 'button';
+  $('job-description').append(action.description + ' ', explain);
+  for (const f of action.fields) {
+    const either = action.oneOf.some((group) => group.includes(f.name)),
+      label = n(
+        'label',
+        f.label + (f.required ? '' : either ? ' · one of two' : ' · optional'),
+        'job-field',
+      );
+    let input;
+    if (f.type === 'choice') {
+      input = n('select');
+      const options = f.options.map((o) => [o, o]);
+      setOptions(
+        input,
+        f.default ? options : [['', 'Choose…'], ...options],
+        f.default ?? '',
+      );
+    } else if (f.multiline || f.type === 'files' || f.type === 'exports') {
+      input = n('textarea');
+      input.rows = 3;
+    } else {
+      input = n('input');
+      input.type = f.type === 'int' ? 'number' : 'text';
+      if (f.type === 'int') {
+        input.min = f.min;
+        input.max = f.max;
+        input.value = f.default ?? '';
+      }
+    }
+    if (f.placeholder) input.placeholder = f.placeholder;
+    if (f.maxLength) input.maxLength = f.maxLength;
+    input.name = f.name;
+    input.spellcheck = false;
+    label.append(input);
+    $('job-fields').append(label);
+  }
+}
+function renderActions() {
+  $('job-indicator').textContent = jobIndicator(jobState);
+  if (!$('actions-dialog').open) return;
+  if (!jobState.actions.some((a) => a.id === jobForm)) {
+    setOptions(
+      $('job-action'),
+      jobState.actions.map((a) => [a.id, a.label]),
+    );
+    renderJobFields();
+  }
+  $('start-job').disabled = !!jobState.active;
+  $('start-job').title = jobState.active ? 'One job runs at a time' : '';
+  const rows = jobState.jobs.slice(0, 20).map((job) => {
+    const b = n('button', new Date(job.createdAt * 1000).toLocaleString());
+    b.onclick = () => {
+      jobId = job.id;
+      renderActions();
+      loadJobLog();
+    };
+    return [b, job.label, job.status, jobElapsed(job)];
+  });
+  table($('job-table'), ['Started', 'Action', 'Status', 'Time'], rows);
+  $('job-table')
+    .querySelectorAll('tbody tr')
+    .forEach((tr, i) =>
+      tr.setAttribute('aria-current', String(jobState.jobs[i].id === jobId)),
+    );
+  $('job-empty').hidden = jobState.jobs.length > 0;
+  const job = jobState.jobs.find((j) => j.id === jobId);
+  $('job-detail').hidden = !job;
+  if (!job) return;
+  $('job-title').textContent = job.label;
+  $('job-status').textContent = job.status;
+  $('job-status').className = 'badge ' + job.status;
+  $('job-command').textContent = 'cd ' + job.cwd + '\n' + job.command;
+  $('cancel-job').hidden = job.id !== jobState.active;
+  $('open-job-run').hidden = !job.run;
+}
+async function loadJobLog() {
+  const id = jobId;
+  if (!id) return;
+  if (jobLog.id !== id) jobLog = { id, offset: null, text: '', done: false };
+  if (jobLog.done) return;
+  const job = jobState.jobs.find((j) => j.id === id),
+    finished = job && job.status !== 'running',
+    r = await fetch(
+      '/api/jobs/' +
+        id +
+        '/log' +
+        (jobLog.offset == null ? '' : '?offset=' + jobLog.offset),
+      jobRequest(jobToken),
+    );
+  if (!r.ok || jobLog.id !== id) return;
+  const chunk = await r.json(),
+    pre = $('job-log'),
+    atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+  jobLog.text =
+    jobLog.offset == null
+      ? (chunk.start > 0 ? '…\n' : '') + chunk.text
+      : tailText(jobLog.text, chunk.text);
+  jobLog.offset = chunk.offset;
+  jobLog.done = finished && chunk.offset >= chunk.size;
+  pre.textContent = jobLog.text || 'No output yet.';
+  if (atEnd) pre.scrollTop = pre.scrollHeight;
+}
+async function pollJobs() {
+  if (!jobToken || jobBusy || document.hidden) return;
+  jobBusy = true;
+  try {
+    const r = await fetch('/api/jobs', jobRequest(jobToken));
+    if (!r.ok) throw Error();
+    jobState = await r.json();
+    for (const a of jobState.actions)
+      glossary['action:' + a.id] = [a.label, a.description];
+    if (!jobId && jobState.jobs.length) jobId = jobState.jobs[0].id;
+    renderActions();
+    if ($('actions-dialog').open) await loadJobLog();
+  } catch {
+    $('job-indicator').textContent = 'Jobs unavailable';
+  } finally {
+    jobBusy = false;
+  }
+}
+async function startJob(event) {
+  event.preventDefault();
+  const action = jobState.actions.find((a) => a.id === jobForm);
+  if (!action) return;
+  const values = Object.fromEntries(
+      [...$('job-fields').querySelectorAll('[name]')].map((e) => [
+        e.name,
+        e.value,
+      ]),
+    ),
+    r = await fetch(
+      '/api/jobs',
+      jobRequest(jobToken, {
+        action: action.id,
+        params: jobParams(action, values),
+      }),
+    ),
+    body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    $('job-error').textContent = body.error || 'Could not start the job.';
+    return;
+  }
+  $('job-error').textContent = '';
+  jobId = body.id;
+  await pollJobs();
+}
+async function cancelJob() {
+  if (!jobId) return;
+  const r = await fetch(
+    '/api/jobs/' + jobId + '/cancel',
+    jobRequest(jobToken, {}),
+  );
+  if (!r.ok)
+    $('job-error').textContent =
+      (await r.json().catch(() => ({}))).error || 'Could not cancel the job.';
+  await pollJobs();
+}
 document.addEventListener('click', (e) => {
   const h = e.target.closest('[data-help]');
   if (h) showHelp(h.dataset.help);
@@ -3382,6 +3608,20 @@ document.addEventListener('click', (e) => {
 $('learn').onclick = () => showHelp();
 $('close-help').onclick = () => $('help-dialog').close();
 $('glossary-search').oninput = () => renderGlossary();
+$('open-actions').onclick = () => {
+  $('actions-dialog').showModal();
+  renderActions();
+  loadJobLog();
+};
+$('close-actions').onclick = () => $('actions-dialog').close();
+$('job-action').onchange = renderJobFields;
+$('job-form').onsubmit = startJob;
+$('cancel-job').onclick = cancelJob;
+$('open-job-run').onclick = () => {
+  const job = jobState.jobs.find((j) => j.id === jobId);
+  $('actions-dialog').close();
+  if (job?.run) selectRun(job.run);
+};
 $('help-dialog').addEventListener('click', (e) => {
   if (e.target === $('help-dialog')) {
     const r = e.target.getBoundingClientRect();
@@ -3466,5 +3706,10 @@ if (offline) {
 } else {
   poll();
   setInterval(poll, 2000);
+  if (jobToken) {
+    $('open-actions').hidden = false;
+    pollJobs();
+    setInterval(pollJobs, 2000);
+  }
 }
 setInterval(updateClock, 1000);

@@ -144,6 +144,28 @@ state and no known live process are labeled interrupted, without editing their
 saved state. Runs with a report but no pipeline status are archived, not assumed
 to have passed parity.
 
+**Actions** (bottom of the sidebar) runs the repository's own scripts from the
+workspace: `train.py --snapshot`, `stage-backtest.py`, `fusion.py`,
+`vitals_reference.py`, `movement_model.py train` and `epochs`, and the archive pull
+that `scripts/install-archive-agent.sh` schedules (core's read-only
+`biometrics:archive pull`, with the pod and core checkout from
+`data/workspace-settings.json`). One job runs at a time; starting another while one
+runs is refused (HTTP 409) rather than queued, so a job never starts on inputs that
+changed after it was requested. Each job writes `data/web-jobs/<id>/command.json`
+(the validated parameters, the exact argv and working directory, status and exit
+code) and `log.txt` in the primary checkout's `data/`, is registered in the run
+catalog, and adds its output to the run list when that output is a run. Parameters
+are checked against fixed schemas: input and output paths must resolve inside
+`data/`, outputs must be new, and nothing passes through a shell. No action uploads,
+selects or activates a model, or writes to the pod. Stopping the workspace
+interrupts a running job.
+
+`POST /api/jobs` exists only in `dashboard.py` (not `train.py --dashboard`), listens
+on 127.0.0.1, and requires the random token embedded in that launch's page as an
+`X-Training-Token` header. Requests with another Host, a cross-site `Origin` or
+`Sec-Fetch-Site`, or a non-JSON body are refused, and every page is served only to
+the `127.0.0.1` and `localhost` host names, so a rebound DNS name cannot read the token.
+
 A **Sleep / Movement / Snore** switch at the top of the sidebar picks the kind of
 research run; the run list shows only that kind. Movement runs (`scripts/movement.py
 train`) and snore runs (`scripts/piezo_bandwidth.py analyze` and `night`) register

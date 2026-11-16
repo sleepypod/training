@@ -31,12 +31,24 @@ TASK_KINDS = {'movement': 'movement', 'snore-session': 'snore', 'snore-night': '
 
 
 def run_kind(path):
-    """'sleep' for training runs, a TASK_KINDS key for movement/snore runs, else None."""
+    """'sleep' for training runs, a TASK_KINDS key for movement/snore runs, 'web-job' for dashboard jobs, else None."""
     path = Path(path)
     if (path / 'progress.json').is_file() or (path / 'model/report.json').is_file():
         return 'sleep'
+    if (path / 'command.json').is_file() and read_json(path / 'command.json', {}).get('kind') == 'web-job':
+        return 'web-job'
     kind = read_json(path / 'report.json', {}).get('kind') if (path / 'report.json').is_file() else None
     return kind if kind in TASK_KINDS else None
+
+
+def alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
 
 
 def iso_seconds(value):
@@ -59,7 +71,7 @@ class Catalog:
     def register(self, path):
         path = Path(path).resolve(strict=True)
         if run_kind(path) is None:
-            raise ValueError('Not a training run: progress.json, model/report.json or a movement/snore report.json is required')
+            raise ValueError('Not a training run: progress.json, model/report.json, a movement/snore report.json or a web-job command.json is required')
         key = uuid.uuid5(uuid.NAMESPACE_URL, path.as_uri()).hex
         with self.connect() as db:
             db.execute('INSERT OR IGNORE INTO runs VALUES (?, ?, ?)', (key, str(path), time.time()))
@@ -92,6 +104,8 @@ class Catalog:
         for key, path, added in rows:
             root = Path(path)
             kind = run_kind(root) if root.is_dir() else None
+            if kind == 'web-job':
+                continue
             if kind and kind != 'sleep':
                 result.append(task_entry(key, root, kind, added))
                 continue
@@ -101,14 +115,7 @@ class Catalog:
             status = state.get('status', 'archived' if report else 'unavailable')
             # A dead process or stale legacy progress is not an actively training run.
             if status == 'running':
-                alive = False
-                if meta.get('pid'):
-                    try:
-                        os.kill(meta['pid'], 0)
-                        alive = True
-                    except (ProcessLookupError, PermissionError):
-                        pass
-                if not alive and time.time() - (root / 'progress.json').stat().st_mtime > 120:
+                if not alive(meta.get('pid')) and time.time() - (root / 'progress.json').stat().st_mtime > 120:
                     status = 'interrupted'
             result.append({'id': key, 'name': meta.get('name') or root.name, 'status': status,
                            'startedAt': state.get('startedAt', (root / 'model/report.json').stat().st_mtime if (root / 'model/report.json').is_file() else added), 'updatedAt': state.get('updatedAt'),
@@ -118,6 +125,21 @@ class Catalog:
                            'candidate': report.get('finalSelected'), 'available': root.is_dir(),
                            'notes': meta.get('notes', ''), 'kind': 'sleep', 'task': 'sleep'})
         return sorted(result, key=lambda r: r['startedAt'], reverse=True)
+
+    def jobs(self):
+        """Dashboard jobs, newest first; a running job whose process is gone is interrupted."""
+        with self.connect() as db:
+            rows = db.execute('SELECT id, path FROM runs').fetchall()
+        result = []
+        for key, path in rows:
+            record = read_json(Path(path) / 'command.json', {}) if Path(path).is_dir() else {}
+            if not isinstance(record, dict) or record.get('kind') != 'web-job':
+                continue
+            status = record.get('status')
+            if status == 'running' and not alive(record.get('pid')):
+                status = 'interrupted'
+            result.append({**record, 'status': status, 'catalogId': key})
+        return sorted(result, key=lambda r: r.get('createdAt') or 0, reverse=True)
 
 
 def task_entry(key, root, kind, added):

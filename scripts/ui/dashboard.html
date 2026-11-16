@@ -44,6 +44,10 @@
       </select>
       <nav id="run-list" aria-label="Training runs"></nav>
       <div class="sidebar-bottom">
+        <div class="actions-entry">
+          <button id="open-actions" hidden>Actions</button
+          ><span id="job-indicator" role="status"></span>
+        </div>
         <span class="dot"></span> Local workspace
         <p>No model activation.<br />Your data stays on this computer.</p>
         <button data-help="training">How training works ↗</button>
@@ -502,6 +506,45 @@
         aria-label="Search explanations"
       />
       <div id="help-content"></div>
+    </dialog>
+    <dialog id="actions-dialog" class="actions-dialog" aria-labelledby="actions-title">
+      <div class="panel-heading">
+        <h2 id="actions-title">
+          Actions
+          <button class="help" data-help="actions" aria-label="Explain actions">
+            ?
+          </button>
+        </h2>
+        <button id="close-actions" aria-label="Close actions">✕</button>
+      </div>
+      <form id="job-form">
+        <label class="job-field"
+          >Action <select id="job-action"></select
+        ></label>
+        <p id="job-description" class="footnote"></p>
+        <div id="job-fields" class="job-fields"></div>
+        <div class="job-submit">
+          <button id="start-job" type="submit">Start job</button
+          ><span id="job-error" class="negative" role="alert"></span>
+        </div>
+      </form>
+      <h3>Jobs</h3>
+      <div class="table-scroll">
+        <table id="job-table" aria-label="Jobs"></table>
+      </div>
+      <p id="job-empty" class="footnote" hidden>No jobs yet. Start one above.</p>
+      <div id="job-detail" hidden>
+        <div class="panel-heading">
+          <h3 id="job-title"></h3>
+          <span id="job-status" class="badge"></span>
+        </div>
+        <code id="job-command" class="job-command"></code>
+        <div class="job-submit">
+          <button id="cancel-job" hidden>Cancel job</button
+          ><button id="open-job-run" hidden>Open run</button>
+        </div>
+        <pre id="job-log" tabindex="0" aria-label="Job log"></pre>
+      </div>
     </dialog>
     <script>
       const embedded = __EMBEDDED__;
