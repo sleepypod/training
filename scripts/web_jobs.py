@@ -14,17 +14,19 @@ import re
 import secrets
 import shlex
 import signal
+import socket
 import subprocess
 from threading import Lock, Thread, Timer
 import time
 from zoneinfo import ZoneInfo
 
-from run_history import ROOT, primary_root, run_kind
+from run_history import ROOT, alive, primary_root, run_kind
 
 JOB_ID = re.compile(r'\d{8}T\d{6}Z-[0-9a-f]{6}')
 SESSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}')
 TIMEZONE = re.compile(r'[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}')
 AGENT = ROOT / 'scripts/install-archive-agent.sh'
+LOCK_FILE = '.biometrics-archive.lock'
 LOG_TAIL = 64 * 1024
 LOG_CHUNK = 256 * 1024
 
@@ -47,6 +49,20 @@ def archive_pull_command(data):
         raise JobError(400, message.removeprefix('install-archive-agent: '))
     cwd, path, *argv = done.stdout.split('\0')[:-1]
     return argv, Path(cwd), {'PATH': path}
+
+
+def archive_lock(dest):
+    """Holder of core's pull lock in dest, else None. As in core, a lock left by a dead process on this host is free."""
+    try:
+        holder = json.loads((Path(dest) / LOCK_FILE).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+    holder = holder if isinstance(holder, dict) else {}
+    if holder.get('host') == socket.gethostname() and isinstance(holder.get('pid'), int) and not alive(holder['pid']):
+        return None
+    return holder
 
 
 def field(name, kind, label, flag=None, **spec):
@@ -124,6 +140,14 @@ ACTIONS = {
         'description': 'Core’s read-only biometrics archive pull into data/archive, the command the nightly agent from scripts/install-archive-agent.sh runs. Pod and core checkout come from data/workspace-settings.json.',
         'build': archive_pull_command, 'output': lambda data: data / 'archive', 'fields': [],
     },
+    'archive-index': {
+        'label': 'Rebuild the archive night index',
+        'description': 'scripts/archive_index.py: one row per archived night with raw coverage, Watch teachers, lineage, locked nights and pruning risk, written to the archive’s index.json. Reads local files only.',
+        'argv': script('scripts/archive_index.py'),
+        'fields': [field('archive', 'dir', 'Pod archive', '--archive', placeholder='data/archive/<podId>', required=True),
+                   field('timezone', 'timezone', 'Timezone', '--timezone', placeholder='America/Los_Angeles', required=True),
+                   field('storage', 'file', 'Saved /api/system/storage', '--storage', placeholder='data/storage.json')],
+    },
 }
 
 
@@ -161,6 +185,11 @@ class JobRunner:
             path = self.path(raw, label)
             if not path.is_file():
                 raise JobError(400, f'{label}: {path} is not a file')
+            return str(path)
+        if kind == 'dir':
+            path = self.path(raw, label)
+            if not path.is_dir():
+                raise JobError(400, f'{label}: {path} is not a folder')
             return str(path)
         if kind == 'files':
             items = raw if isinstance(raw, list) else None
