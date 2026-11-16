@@ -1,5 +1,9 @@
 # Knowledge update log
 
+## 2026-11-16
+
+- **Creation**: Captured [E2, replayed vs live vitals](evaluation/e2-replayed-vitals-2026-11-16.md): a tie on staging, better breathing agreement. No model export or activation.
+
 ## 2026-11-15
 
 - **Creation**: Set the [locked holdout](evaluation/locked-holdout.md) from the model-graph plan (decision Q4): freeze 2026-11-14, every fourth night group locked, trial and final reads only, each logged in `data/holdout-access.jsonl`. Stage scripts drop locked nights; dashboards hide their scores. No model activation.
