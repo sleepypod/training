@@ -5,9 +5,14 @@ one or more inner firmware records (core modules/common/cbor_raw.py and
 src/streaming/piezoStream.ts). piezo-dual records carry whole-second `ts`,
 `freq` and little-endian int32 sample buffers in left1/right1 (left2/right2 on
 some hardware). INT32_MAX marks a lost sample.
+
+RAW files come from an /api/export/archive tarball or from core's off-pod archive
+(data/archive/<podId>, `pnpm biometrics:archive pull`); `raw_files` reads either.
 """
 import gzip
+import hashlib
 import io
+import sqlite3
 import struct
 import tarfile
 from pathlib import Path
@@ -18,6 +23,9 @@ LOST_SAMPLE = np.iinfo(np.int32).max
 CHANNELS = ('left1', 'right1', 'left2', 'right2')
 MAX_DATA = 1_000_000
 MAX_INTERPOLATED = 5  # samples (10 ms at 500 Hz)
+# Core's analysis export takes archives whose mtime falls in [start − 20 min, end + 45 min]:
+# a frame is gzipped about 15 min after it closes. The archive resolver uses the same window.
+ARCHIVE_MTIME_LEAD_S, ARCHIVE_MTIME_LAG_S = 20 * 60, 45 * 60
 
 
 def _argument(read, additional):
@@ -177,6 +185,45 @@ def export_files(tar_path):
     """Yield (name, compressed_size, raw_bytes) for every RAW file in an /api/export/archive tarball."""
     for name, stored in export_members(tar_path):
         yield name, len(stored), decompress(name, stored)
+
+
+def archive_window(pod_dir, start_s, end_s):
+    """(name, path, sha256) of archived RAW files that can hold [start_s, end_s), oldest first like the export."""
+    pod_dir = Path(pod_dir)
+    low, high = (start_s - ARCHIVE_MTIME_LEAD_S) * 1000, (end_s + ARCHIVE_MTIME_LAG_S) * 1000
+    rows = None
+    db = pod_dir / 'biometrics.db'
+    if db.is_file():
+        with sqlite3.connect(f'file:{db.resolve()}?mode=ro', uri=True) as conn:
+            if conn.execute("select 1 from sqlite_master where type='table' and name='archive_raw_files'").fetchone():
+                rows = conn.execute('select archive_name, sha256, mtime_ms from archive_raw_files where mtime_ms between ? and ? '
+                                    'order by mtime_ms, archive_name', (low, high)).fetchall()
+    if rows is None:  # No bookkeeping table: the archiver keeps the pod's mtime on archive/ links.
+        stamped = [(p.name, None, int(p.stat().st_mtime * 1000)) for p in (pod_dir / 'archive').glob('*.RAW.gz')]
+        rows = sorted((r for r in stamped if low <= r[2] <= high), key=lambda r: (r[2], r[0]))
+    out = []
+    for name, sha, _ in rows:
+        path = pod_dir / 'raw' / f'{sha}.RAW.gz' if sha else None
+        out.append((name, path if path and path.exists() else pod_dir / 'archive' / name, sha))
+    return out
+
+
+def archive_files(pod_dir, start_s, end_s):
+    """Yield (name, compressed_size, raw_bytes) like export_files, from the archive files covering the window."""
+    for name, path, sha in archive_window(pod_dir, start_s, end_s):
+        stored = path.read_bytes()
+        if sha and hashlib.sha256(stored).hexdigest() != sha:
+            raise ValueError(f'Archived RAW {name} does not match its SHA-256 {sha}')
+        yield name, len(stored), decompress(name, stored)
+
+
+def raw_files(source, start_s=None, end_s=None):
+    """RAW files from an export tarball, or from an archive pod directory for the window [start_s, end_s)."""
+    if Path(source).is_dir():
+        if start_s is None or end_s is None:
+            raise ValueError('Reading the archive needs a time window')
+        return archive_files(source, start_s, end_s)
+    return export_files(source)
 
 
 def samples(buffer):

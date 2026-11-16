@@ -116,9 +116,10 @@ def fetch_export(pod, start_s, end_s, out):
     return {'url': url, 'bytes': out.stat().st_size, 'sha256': digest.hexdigest()}
 
 
-def load_export(path):
+def load_export(path, start_s=None, end_s=None):
+    """Records from an export tarball, or from an archive pod directory's RAW files for [start_s, end_s)."""
     recs, errors, files = [], [], []
-    for name, compressed, raw in raw_piezo.export_files(path):
+    for name, compressed, raw in raw_piezo.raw_files(path, start_s, end_s):
         count = 0
         for rec, error in raw_piezo.records(raw):
             if error:
