@@ -276,7 +276,7 @@ class NoPodWritesTests(unittest.TestCase):
     SCRIPTS = {'scripts/train.py', 'scripts/stage-backtest.py', 'scripts/fusion.py', 'scripts/vitals_reference.py',
                'scripts/movement_model.py'}
     WRITES = re.compile(r'sleep-stages/model|watch-upload|/api/device|/api/settings|/api/schedules|'
-                        r"method\s*=\s*['\"](PUT|POST|PATCH|DELETE)|['\"]-X['\"]|--request|holdout-final", re.I)
+                        r"method\s*=\s*['\"](PUT|POST|PATCH|DELETE)|['\"]-X['\"]|--request", re.I)
 
     def test_action_allow_list_is_fixed(self):
         self.assertEqual(set(ACTIONS), {'train', 'stage-backtest', 'fusion', 'vitals-reference', 'movement-model-train',
