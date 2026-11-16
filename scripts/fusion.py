@@ -191,6 +191,8 @@ def main():
     movement = json.loads(args.movement_epochs.read_text())
     if movement.get('version') != 'movement-epochs-v2':
         raise ValueError('Movement epochs are not cross-fitted per held-out night; rerun movement_model.py epochs')
+    if any(ho.locked(n) for n in movement.get('teachingNights', [])):
+        raise ValueError('The movement model was taught by Watch motion on locked holdout nights; retrain it with movement_model.py train')
     if movement['inputSha256'] != hashlib.sha256(args.features.read_bytes()).hexdigest():
         raise ValueError('Movement epochs were computed for different features')
     args.out.mkdir(parents=True, exist_ok=True)
@@ -231,7 +233,6 @@ def main():
         limitations=['One participant; nights were inspected before, so this is retrospective, not prospective.',
             'Watch stages are the reference, not polysomnography; Watch wake labels are sparse.',
             'The movement model is fitted on Watch-motion nights that can postdate a chronological test night; it never saw that night.',
-            'Movement models may have been taught by Watch motion on locked holdout nights; movement_model.py does not apply the holdout yet.',
             'Raw-piezo movement features need a core port before a pod can compute them.',
             'Many arm comparisons on the same nights: read single intervals with multiplicity in mind.',
             'No export, upload or activation performed.'])

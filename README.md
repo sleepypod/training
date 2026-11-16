@@ -402,6 +402,8 @@ raw from the off-pod archive; an `--export` still wins for its session. Its feat
 model fitted without every Watch-motion night whose windows fall inside it, and once more
 per other Watch-motion night T by a model also fitted without T. `model.joblib` keeps the
 teaching windows so these models can be refitted; one trained by an earlier version is refused.
+Watch motion on locked holdout nights never teaches the movement model; `epochs` and `fusion.py`
+refuse a model that was taught on one.
 Moving windows are those strictly above the strict threshold, so tied probabilities at the
 cutoff never count as moving. Raw-piezo features need a core port before a pod can compute them.
 

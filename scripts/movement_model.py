@@ -31,6 +31,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hashing import file_sha256
+import holdout as ho
 import movement as mv
 import movement_portable as portable
 import piezo_bandwidth as pb
@@ -111,6 +112,9 @@ def epoch_agreement(rows, moving):
 def cmd_train(args):
     out = pb.prepare_output(args.out)
     rows = [r for path in args.windows for r in json.loads(Path(path).read_text()) if r.get('watch') and r['baseline'] is not None]
+    # Watch motion on locked holdout nights never teaches: its features would reach stage scores on those nights.
+    holdout = ho.record({r['night'] for r in rows})
+    rows = ho.drop_locked(rows, key=lambda r: r['night'])
     nights = sorted({r['night'] for r in rows})
     if len(nights) < 2:
         raise SystemExit('Need Watch-labeled windows from at least two nights')
@@ -153,7 +157,7 @@ def cmd_train(args):
                   windowLevel={arm: mv.binary_metrics(truth, flags, labels) for arm, flags in arms.items()},
                   epochLevel={**{arm: epoch_agreement(rows, flags) for arm, flags in arms.items()},
                               'modelProbability': epoch_agreement(rows, probability)},
-                  perNightBalancedAccuracy=per_night, thresholds={n: {k: f[k] for k in ('threshold', 'strictThreshold')} for n, f in (folds | {'final': final}).items()},
+                  perNightBalancedAccuracy=per_night, holdout=holdout, thresholds={n: {k: f[k] for k in ('threshold', 'strictThreshold')} for n, f in (folds | {'final': final}).items()},
                   strictFalseAlarm=STRICT_FALSE_ALARM,
                   model=MODEL, classifierV1=V1, portable=exported, featureNames=mv.FEATURE_NAMES + ['podScore'],
                   scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -265,6 +269,8 @@ def cmd_epochs(args):
         raise SystemExit(f'{args.model} predates cross-fitted epochs; retrain it with this version of movement_model.py train')
     models = CrossFitted(bundle)
     teaching_nights = sorted(set(bundle['teaching']['nights'].tolist()))
+    if any(ho.locked(n) for n in teaching_nights):
+        raise SystemExit(f'{args.model} was taught by Watch motion on locked holdout nights; retrain it with this version of movement_model.py train')
     by_id = {str(n['id']): n for n in data['nights']}
     exports = dict(value.partition('=')[::2] for value in args.export)
     # Local exports win for their sessions (pre-archive nights); the archive covers the rest.

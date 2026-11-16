@@ -113,10 +113,10 @@ class MovementModelTests(unittest.TestCase):
                 conn.execute('create table movement (side text, timestamp integer, total_movement real)')
             features = root / 'features.json'
             features.write_text(json.dumps({'side': 'left', 'sources': {'snapshot': hashlib.sha256(db.read_bytes()).hexdigest()},
-                                            'nights': [{'id': 7, 'group': 'b', 'start': 0, 'end': 600, 'rows': [{'start': 0}, {'start': 300}]}]}))
+                                            'nights': [{'id': 7, 'group': '2026-11-02', 'start': 0, 'end': 600, 'rows': [{'start': 0}, {'start': 300}]}]}))
             rng = np.random.default_rng(1)
             teaching = {'x': rng.normal(size=(90, 21)), 'labels': np.array(['still', 'light'] * 45),
-                        'nights': np.array(['a'] * 30 + ['b'] * 30 + ['c'] * 30),
+                        'nights': np.array(['2026-11-01'] * 30 + ['2026-11-02'] * 30 + ['2026-11-03'] * 30),
                         't': np.concatenate([np.arange(30.0) + 5000, np.arange(30.0) + 100, np.arange(30.0) + 9000])}
             model = root / 'model.joblib'
             mm.joblib.dump({'final': mm.fit_matrix(teaching['x'], teaching['labels']), 'heldOut': {}, 'teaching': teaching}, model)
@@ -126,9 +126,35 @@ class MovementModelTests(unittest.TestCase):
                  patch.object(mm, 'one_session', lambda job: (job[1]['id'], windows, 0, {'exportSha256': 'sha'})):
                 mm.main(['epochs', str(features), '--snapshot', str(db), '--model', str(model), '--export', '7=x.tar.gz', '--out', str(out)])
             session = json.loads(out.read_text())['sessions']['7']
-            self.assertEqual(session['excludedNights'], ['b'])
-            self.assertEqual(set(session['excluding']), {'a', 'c'})
+            self.assertEqual(session['excludedNights'], ['2026-11-02'])
+            self.assertEqual(set(session['excluding']), {'2026-11-01', '2026-11-03'})
             self.assertIsNone(session['rows'][1]['mmActive'])
+
+    def test_train_never_learns_from_locked_holdout_nights(self):
+        rng = np.random.default_rng(2)
+        rows = [{'night': night, 't': float(i), 'label': 'still' if i % 2 else 'light', 'watch': True, 'baseline': 0.0,
+                 'x': rng.normal(size=20).tolist()} for night in ('2026-11-12', '2026-11-13', '2026-11-14') for i in range(40)]
+        with tempfile.TemporaryDirectory() as directory:
+            windows = Path(directory) / 'windows.json'
+            windows.write_text(json.dumps(rows))
+            out = Path(directory) / 'run'
+            mm.main(['train', '--windows', str(windows), '--out', str(out)])
+            bundle = mm.joblib.load(out / 'model.joblib')
+            self.assertEqual(sorted(set(bundle['teaching']['nights'].tolist())), ['2026-11-12', '2026-11-13'])
+            self.assertEqual(json.loads((out / 'report.json').read_text())['holdout']['lockedGroups'], ['2026-11-14'])
+
+    def test_epochs_refuse_a_model_taught_on_locked_nights(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / 'biometrics.db'
+            sqlite3.connect(db).close()
+            features = root / 'features.json'
+            features.write_text(json.dumps({'side': 'left', 'sources': {'snapshot': hashlib.sha256(db.read_bytes()).hexdigest()}, 'nights': []}))
+            model = root / 'model.joblib'
+            mm.joblib.dump({'final': None, 'heldOut': {}, 'teaching': {'x': np.zeros((2, 21)), 'labels': np.array(['still', 'light']),
+                                                                       'nights': np.array(['2026-11-13', '2026-11-14']), 't': np.arange(2.0)}}, model)
+            with self.assertRaises(SystemExit):
+                mm.main(['epochs', str(features), '--snapshot', str(db), '--model', str(model), '--export', '1=x.tar.gz', '--out', str(root / 'e.json')])
 
     def test_cross_fitting_refuses_a_fold_without_still_windows(self):
         bundle = {'final': None, 'heldOut': {}, 'teaching': {'x': np.zeros((4, 21)), 'labels': np.array(['still', 'still', 'light', 'light']),
