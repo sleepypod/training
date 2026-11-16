@@ -46,7 +46,7 @@ def reading(t, side='left', config=PROFILE, **changes):
             'limitations': [], **changes}
 
 
-def replay(directory, rows, night='2026-10-25', window=(START, START + 1200), skipped=(), parity=None):
+def replay(directory, rows, night='2026-10-25', window=(START, START + 1200), skipped=(), gate='pass'):
     (directory / 'readings').mkdir(parents=True)
     name = f'readings/{night}-{PROFILE[:12]}.json'
     (directory / name).write_text(json.dumps({'cohortId': night, 'configHash': PROFILE, 'side': 'left', 'readings': rows}))
@@ -54,7 +54,8 @@ def replay(directory, rows, night='2026-10-25', window=(START, START + 1200), sk
         'version': 'biometrics-local-fit-replay-v1', 'side': 'left', 'timezone': TZ, 'engine': {'manifestHash': ENGINE},
         'config': {'source': 'defaults', 'overrides': [], 'configHash': PROFILE},
         'nights': [{'night': night, 'scoreStartMs': window[0] * 1000, 'scoreEndMs': window[1] * 1000, 'readingsFile': name,
-                    **({'parity': {'gate': parity}} if parity else {})}],
+                    **({'parity': {'trainingGate': gate, 'meanDifference': 0.1, 'trainingChecks': {'comparedMinutes': {'value': 20, 'pass': True}}}}
+                       if gate else {})}],
         'skipped': [{'night': n, 'reason': 'the archive holds no RAW file written during the night'} for n in skipped]}))
     return directory
 
@@ -77,9 +78,9 @@ class DeriveSnapshotTests(unittest.TestCase):
         rows = [reading(t) for t in range(START, START + 1200, 60)] + [reading(START + 1260)]
         return rows + [reading(t, side='right', config=OTHER) for t in range(START, START + 1200, 60)]
 
-    def derive(self, rows=None, **kwargs):
+    def derive(self, rows=None, allow_ungated=False, **kwargs):
         d.ingest(replay(self.root / 'replay', self.readings() if rows is None else rows, **kwargs), self.cache)
-        return d.derive(self.source, self.root / 'derived/biometrics.db', ENGINE, PROFILE, 'left', TZ, ['2026-10-25'], self.cache)
+        return d.derive(self.source, self.root / 'derived/biometrics.db', ENGINE, PROFILE, 'left', TZ, ['2026-10-25'], self.cache, allow_ungated)
 
     def test_replaces_only_the_side_and_window(self):
         before = sqlite3.connect(self.source)
@@ -96,8 +97,8 @@ class DeriveSnapshotTests(unittest.TestCase):
         self.assertTrue(all(q[1:] == (0.7, '["low_signal"]', 71.0) for q in quality))
         self.assertEqual(db.execute('select count(*) from vitals_quality').fetchone(), before.execute('select count(*) from vitals_quality').fetchone())
         row = d.replayed(db)['2026-10-25']
-        self.assertEqual((row['source_sha256'], row['engine'], row['profile'], row['removed_vitals'], row['readings']),
-                         (d.sha256(self.source), ENGINE, PROFILE, 20, 20))
+        self.assertEqual((row['source_sha256'], row['engine'], row['profile'], row['removed_vitals'], row['readings'], row['replayed'], row['gate']),
+                         (d.sha256(self.source), ENGINE, PROFILE, 20, 20, 1, 'pass'))
         self.assertEqual(row['readings_sha256'], d.sha256(self.cache / f'2026-10-25-{ENGINE[:12]}-{PROFILE[:12]}.json'))
         self.assertEqual(row['replay_sha256'], d.sha256(self.root / 'replay/replay.json'))
         self.assertEqual(db.execute('select kind, config_hash from biometric_processing_runs').fetchall(), [('replay', PROFILE)])
@@ -135,11 +136,28 @@ class DeriveSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'no cached readings'):
             d.derive(self.source, self.root / 'other.db', ENGINE, OTHER, 'left', TZ, ['2026-10-25'], self.cache)
 
-    def test_a_night_failing_stored_parity_is_never_derived(self):
-        with self.assertRaisesRegex(ValueError, 'parity gate'):
-            self.derive(parity='fail')
+    def test_only_nights_core_s_training_gate_accepts_are_replaced(self):
+        for gate in ('fail', 'not_gated_different_config', None):
+            with self.assertRaisesRegex(ValueError, 'No night'):
+                self.derive(gate=gate)
+            self.tmp.cleanup()
+            self.setUp()
         with self.assertRaisesRegex(ValueError, 'No night'):
-            d.derive(self.source, self.root / 'all.db', ENGINE, PROFILE, 'left', TZ, None, self.cache)
+            self.derive(gate='fail', allow_ungated=True)
+        self.tmp.cleanup()
+        self.setUp()
+        result = self.derive(gate='not_gated_different_config', allow_ungated=True)
+        row = d.replayed(sqlite3.connect(result['out']))['2026-10-25']
+        self.assertEqual((row['replayed'], row['gate']), (1, 'not_gated_different_config'))
+        self.assertIn('--allow-ungated', row['reason'])
+        self.assertEqual(json.loads(row['checks']), {'comparedMinutes': {'value': 20, 'pass': True}})
+
+    def test_gate_reads_core_s_verdict(self):
+        self.assertEqual(d.training_gate({'trainingGate': 'pass'}), (True, 'pass', None))
+        self.assertFalse(d.training_gate({'trainingGate': 'fail'}, allow_ungated=True)[0])
+        self.assertEqual(d.training_gate(None)[:2], (False, 'not_compared'))
+        self.assertTrue(d.training_gate({'gate': 'fail'}, allow_ungated=True)[0])  # Before core's training gate: never judged here.
+        self.assertTrue(d.training_gate({'trainingGate': 'no_heart_rate_to_compare'}, allow_ungated=True)[0])
 
     def test_cache_is_write_once_and_records_skipped_nights(self):
         d.ingest(replay(self.root / 'a', self.readings(), skipped=['2026-10-24']), self.cache)

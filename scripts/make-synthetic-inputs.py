@@ -70,10 +70,13 @@ def write_replay(output, nights):
                                      sourceSide=side, configHash=config, limitations=[]))
         name = f'readings/{key}-{profile[:12]}.json'
         (output / name).write_text(json.dumps(dict(cohortId=key, configHash=profile, side='left', readings=readings)) + '\n')
-        rows.append(dict(night=key, source='archive', scoreStartMs=start * 1000, scoreEndMs=(start + 10800) * 1000, readingsFile=name, readings=len(readings)))
+        # As if replayed with --compare-stored and passed by core's training gate.
+        rows.append(dict(night=key, source='archive', scoreStartMs=start * 1000, scoreEndMs=(start + 10800) * 1000, readingsFile=name, readings=len(readings),
+                         parity=dict(trainingGate='pass', comparedMinutes=180, heartRateCoverage=1.0, meanDifference=0.1,
+                                     medianAbsDifference=0.3, shareWithinOneBpm=0.9)))
     (output / 'replay.json').write_text(json.dumps(dict(version='biometrics-local-fit-replay-v1', label='exploratory-local', side='left', timezone='UTC',
         engine=dict(manifestHash=engine), config=dict(source='synthetic', overrides=[], configHash=profile), otherSideConfigHash=other,
-        nights=rows, skipped=[]), indent=2) + '\n')
+        nights=rows, skipped=[], parity=dict(training=dict(passedNights=[r['night'] for r in rows], failedNights=[]))), indent=2) + '\n')
 
 
 if __name__ == '__main__':

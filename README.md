@@ -517,9 +517,17 @@ night's source database SHA-256, engine (biometrics manifest hash), profile (res
 hash), readings SHA-256 and `replay.json` SHA-256. Readings are cached once per
 (night, engine, profile) in `data/cache/vitals/<night>-<engine12>-<profile12>.json`; `derive
 --engine E --profile P --side left --timezone TZ` rebuilds from the cache alone, and a night
-whose sleep records changed since its replay is refused. With `--compare-stored`, core
-checks each replay against the stored rows of nights that ran one unchanged profile; a night
-that fails that parity gate is never derived (plan C5).
+whose sleep records changed since its replay is refused.
+
+Replayed readings replace a night's rows only when core's training gate passed that night.
+The gate comes from `replay --compare-stored`, in `nights[].parity.trainingGate`, and it
+judges level, scatter and coverage against the stored rows, only on nights whose rows ran
+the replayed profile. `--allow-ungated` also accepts nights the gate could not judge
+(`not_gated_*`, `no_heart_rate_to_compare`, or a replay without `--compare-stored`). That
+is the normal case when replaying a profile other than the one stored. A failed night is
+never used. Every other night keeps its stored rows. Each night's verdict, core's check
+values and the reason are recorded in `derived_snapshot`. The thresholds are core's and rest
+on two real nights so far, so treat a pass as a coarse check, not proof of parity.
 
 `scripts/modelset.py` writes `RUN/model/set.json` (`modelset-v1`) next to an exported model:
 the stage model pinned by core's own hash (`modelset.py hash candidate.json`; the canonical JSON

@@ -7,8 +7,11 @@
 Readings come from core: `pnpm biometrics:local-fit replay --archive DEST/POD_ID ... OUT`
 writes OUT/replay.json and OUT/readings/<night>-<profile12>.json (`--save-readings` format).
 The cache is data/cache/vitals/<night>-<engine12>-<profile12>.json, the readings file
-verbatim, with a `.source.json` beside it. A night whose replay failed core's stored-row
-parity gate (`--compare-stored`) is never derived: its replay is not used for training. Every other table is copied unchanged, so
+verbatim, with a `.source.json` beside it. Replayed readings replace a night's rows only when
+core's training gate passed it (`replay --compare-stored`, `nights[].parity.trainingGate`);
+`--allow-ungated` also accepts nights the gate could not judge, such as nights stored under
+another profile. Every other night keeps its stored rows. Each night and the gate's verdict
+are recorded either way. Every other table is copied unchanged, so
 export-runtime-features.ts and the stage scripts run on the derived snapshot as on any
 other. A `derived_snapshot` table records, per night, the source database SHA-256, engine,
 profile, readings SHA-256 and replay.json SHA-256. Local files only; never contacts a pod.
@@ -31,7 +34,9 @@ SIDECARS = ('pod-stages.json',)  # The pod's live stages: unchanged by replayed 
 TABLE = '''CREATE TABLE derived_snapshot (night TEXT PRIMARY KEY, side TEXT NOT NULL, source_sha256 TEXT NOT NULL,
     engine TEXT NOT NULL, profile TEXT NOT NULL, readings_sha256 TEXT NOT NULL, replay_sha256 TEXT,
     start INTEGER NOT NULL, end INTEGER NOT NULL, removed_vitals INTEGER NOT NULL, readings INTEGER NOT NULL,
-    script_sha256 TEXT NOT NULL)'''
+    script_sha256 TEXT NOT NULL, replayed INTEGER NOT NULL, gate TEXT NOT NULL, reason TEXT, checks TEXT)'''
+PARITY_KEYS = ('trainingGate', 'trainingChecks', 'gate', 'comparedMinutes', 'heartRateCoverage', 'meanDifference',
+               'medianAbsDifference', 'shareWithinOneBpm')
 
 
 def default_cache():
@@ -69,7 +74,8 @@ def read_replay(directory):
     return dict(engine=doc['engine']['manifestHash'], profile=doc['config']['configHash'], overrides=doc['config'].get('overrides'),
                 side=doc['side'], timezone=doc['timezone'], sha256=sha256(path), archive=doc.get('archive'),
                 nights=[dict(night=n['night'], startMs=n['scoreStartMs'], endMs=n['scoreEndMs'], readings=Path(directory) / n['readingsFile'],
-                             parity=(n.get('parity') or {}).get('gate')) for n in doc['nights']],
+                             parity={k: n['parity'].get(k) for k in PARITY_KEYS} if n.get('parity') else None) for n in doc['nights']],
+                training=(doc.get('parity') or {}).get('training'),
                 skipped=doc.get('skipped', []))
 
 
@@ -113,13 +119,30 @@ def ingest(directory, cache=None):
             shutil.copyfile(night['readings'], target)
         record = dict(night=night['night'], engine=replay['engine'], profile=replay['profile'], side=replay['side'],
                       timezone=replay['timezone'], startMs=night['startMs'], endMs=night['endMs'], readingsSha256=digest,
-                      replaySha256=replay['sha256'], overrides=replay['overrides'], parity=night['parity'])
+                      replaySha256=replay['sha256'], overrides=replay['overrides'], parity=night['parity'], trainingGate=replay['training'])
         base.with_name(base.name + '.source.json').write_text(json.dumps(record, indent=2) + '\n')
         out.append(record)
     for row in replay['skipped']:
         (cache / (cache_name(row['night'], replay['engine'], replay['profile']) + '.skipped.json')).write_text(
             json.dumps(dict(night=row['night'], reason=row['reason'], replaySha256=replay['sha256'])) + '\n')
     return replay, out
+
+
+def training_gate(parity, allow_ungated=False):
+    """(use the replay, verdict, reason) from core's per-night training gate; thresholds stay in core."""
+    verdict = (parity or {}).get('trainingGate') if isinstance(parity, dict) else None
+    if verdict is None:
+        label = 'not_compared'
+        why = 'replay ran without --compare-stored' if not parity else 'core replay predates the training gate'
+    else:
+        label, why = verdict, None
+    if label == 'pass':
+        return True, label, None
+    if label == 'fail':
+        return False, label, 'replay failed core\'s training gate against the stored rows'
+    if allow_ungated:
+        return True, label, f'accepted ungated ({why or label}) with --allow-ungated'
+    return False, label, f'not judged by core\'s training gate ({why or label}); --allow-ungated accepts it'
 
 
 def night_of(seconds, timezone):
@@ -156,8 +179,8 @@ def processing_run(db, side, engine, profile, nights, start_ms):
     return values['id']
 
 
-def derive(source, out, engine, profile, side, timezone, nights=None, cache=None):
-    """Write `out`: `source` with each listed night's vitals replaced by its cached readings."""
+def derive(source, out, engine, profile, side, timezone, nights=None, cache=None, allow_ungated=False, gate=training_gate):
+    """Write `out`: `source` with each listed night's vitals replaced by its cached readings where `gate` accepts them."""
     source, out, cache = Path(source), Path(out), Path(cache or default_cache())
     if out.exists():
         raise ValueError(f'{out} exists; choose a new path')
@@ -178,19 +201,14 @@ def derive(source, out, engine, profile, side, timezone, nights=None, cache=None
         if night not in windows:
             raise ValueError(f'{night}: no {side} sleep record in {source}')
         path, record = hit
-        if record.get('parity') == 'fail':
-            if nights is not None:
-                raise ValueError(f'{night}: the replay failed the stored-row parity gate, so it is not used for training')
-            live.append(night)
-            continue
         start, end = windows[night]
         if (record['startMs'], record['endMs']) != (start * 1000, end * 1000) or record['side'] != side:
             raise ValueError(f'{night}: replay window or side differs from this database; sleep records changed since the replay')
         if sha256(path) != record['readingsSha256']:
             raise ValueError(f'{path}: cached readings changed')
-        plan.append((night, start, end, path, record))
-    if not plan:
-        raise ValueError('No night has cached readings for this engine and profile')
+        plan.append((night, start, end, path, record, *gate(record.get('parity'), allow_ungated)))
+    if not any(use for *_, use, _, _ in plan):
+        raise ValueError('No night has cached readings this gate accepts for this engine and profile')
     out.parent.mkdir(parents=True, exist_ok=True)
     partial = out.with_name(out.name + '.partial')
     partial.unlink(missing_ok=True)
@@ -205,9 +223,16 @@ def derive(source, out, engine, profile, side, timezone, nights=None, cache=None
     try:
         with db:
             quality = columns(db, 'vitals_quality')
-            run_id = processing_run(db, side, engine, profile, {n: r['readingsSha256'] for n, *_, r in plan}, plan[0][1] * 1000)
+            used = [row for row in plan if row[5]]
+            run_id = processing_run(db, side, engine, profile, {row[0]: row[4]['readingsSha256'] for row in used}, used[0][1] * 1000)
             db.execute(TABLE)
-            for night, start, end, path, record in plan:
+            for night, start, end, path, record, use, verdict, reason in plan:
+                checks = json.dumps((record.get('parity') or {}).get('trainingChecks'), sort_keys=True)
+                if not use:
+                    db.execute('insert into derived_snapshot values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               (night, side, source_sha, engine, profile, record['readingsSha256'], record.get('replaySha256'), start, end, 0, 0, script,
+                                0, verdict, reason, checks))
+                    continue
                 readings = read_readings(path)
                 rows = [r for r in readings['rows'] if r['side'] == side and start <= r['timestampMs'] // 1000 < end]
                 if any(r['configHash'] != profile for r in rows):
@@ -231,8 +256,9 @@ def derive(source, out, engine, profile, side, timezone, nights=None, cache=None
                                  flags=json.dumps(r['flags']) if r['flags'] else None, hr_raw=r['hrRaw'], created_at=stamp)
                         q = {k: v for k, v in q.items() if k in quality}
                         db.execute(f'insert into vitals_quality ({",".join(q)}) values ({",".join("?" * len(q))})', list(q.values()))
-                db.execute('insert into derived_snapshot values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                           (night, side, source_sha, engine, profile, record['readingsSha256'], record.get('replaySha256'), start, end, len(ids), len(rows), script))
+                db.execute('insert into derived_snapshot values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                           (night, side, source_sha, engine, profile, record['readingsSha256'], record.get('replaySha256'), start, end, len(ids), len(rows), script,
+                            1, verdict, reason, checks))
     finally:
         db.close()
     partial.rename(out)
@@ -240,7 +266,7 @@ def derive(source, out, engine, profile, side, timezone, nights=None, cache=None
         if (source.parent / name).is_file() and not (out.parent / name).exists():
             shutil.copyfile(source.parent / name, out.parent / name)
     return dict(out=str(out), sha256=sha256(out), source=source_sha, engine=engine, profile=profile, side=side,
-                replayed=[n for n, *_ in plan], live=live)
+                replayed=[row[0] for row in plan if row[5]], kept={row[0]: row[7] for row in plan if not row[5]}, live=live)
 
 
 def replayed(db):
@@ -270,6 +296,7 @@ def main(argv=None):
     d.add_argument('--timezone', help='IANA timezone of the night key')
     d.add_argument('--nights', help='comma-separated nights; default every night of the side with cached readings')
     d.add_argument('--cache', type=Path, help='default: data/cache/vitals in the primary checkout')
+    d.add_argument('--allow-ungated', action='store_true', help="also replace nights core's training gate could not judge (recorded per night)")
     args = ap.parse_args(argv)
     if args.command == 'ingest':
         replay, rows = ingest(args.replay, args.cache)
@@ -287,8 +314,10 @@ def main(argv=None):
             ap.error('without --replay, give --engine, --profile, --side and --timezone')
         engine, profile, side, timezone = args.engine, args.profile, args.side, args.timezone
         nights = args.nights.split(',') if args.nights else None
-    result = derive(args.source, args.out, engine, profile, side, timezone, nights, args.cache)
+    result = derive(args.source, args.out, engine, profile, side, timezone, nights, args.cache, args.allow_ungated)
     print(f"Derived {result['out']} ({result['sha256'][:12]}): {len(result['replayed'])} nights replayed with engine {engine[:12]} profile {profile[:12]}")
+    for night, reason in result['kept'].items():
+        print(f'Kept stored vitals for {night}: {reason}')
     if result['live']:
         print(f"Still live vitals (no cached readings): {', '.join(result['live'])}")
     return 0

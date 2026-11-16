@@ -1,7 +1,7 @@
 """Model set manifests and the canonical-JSON port, pinned to vectors core computed.
 
 The vectors below came from scripts/canonical-vectors.ts run with `pnpm exec tsx` inside
-core checkouts (sleepypod-core-archive fc40624c and the stage-model-set branch 1fd2a784);
+core checkouts (sleepypod-core-archive fc40624c and core PR #930, stage-model-set, at 1fd2a784);
 both printed identical results. Rerun it after core changes canonical-json.ts.
 """
 import json
@@ -76,6 +76,16 @@ class CanonicalTests(unittest.TestCase):
         m.config_hash(['x' * 65536])
         m.data_hash([0] * 20000)
         self.assertEqual(m.data_hash([{'i': i, 'x': i / 7} for i in range(50000)]), CORE_LARGE_DATA)
+
+    def test_matches_core_golden_forest(self):
+        # src/lib/tests/stage-model-set.test.ts in core PR #930: the upload validator's own golden value.
+        forest = dict(version='test-forest', kind='forest', classes=['wake', 'light', 'deep', 'rem'],
+                      featureContract=['hrZ', 'hrStdZ', 'motionZ', 'nightFraction'],
+                      trees=[dict(f=[0, -1, -1], t=[-0.5, 0, 0], l=[1, -1, -1], r=[2, -1, -1], v=[[0, 0, 0, 0], [0, 1, 9, 0], [1, 8, 1, 0]])],
+                      testVectors=[dict(inputs=dict(hrZ=-1, hrStdZ=0, motionZ=0, nightFraction=0.5), expected=2),
+                                   dict(inputs=dict(hrZ=1, hrStdZ=0, motionZ=0, nightFraction=0.5), expected=1)],
+                      metrics=dict(kappa=0.1, note='\u00e9'))
+        self.assertEqual(m.stage_sha256(forest), '6fe42238f142207ca4016e4fe243a439e63e362043938fa15d4f09bdcf2c7906')
 
     def test_stage_hash_is_the_stored_model(self):
         self.assertEqual(m.stage_sha256(model()), CORE_STAGE)
