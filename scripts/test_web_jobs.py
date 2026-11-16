@@ -1,17 +1,20 @@
 """Dashboard job runner: token and origin guard, schema validation, one job at a time, no pod writes."""
 import http.client
 import json
+import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from dashboard import html, serve
 from run_history import ROOT, Catalog
-from web_jobs import ACTIONS, JobError, JobRunner, archive_pull_command
+from web_jobs import ACTIONS, JobError, JobRunner
 
 TOKEN = re.compile(r'"jobToken": "([A-Za-z0-9_-]+)"')
 
@@ -195,7 +198,7 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 400)
 
     def test_train_builds_flag_value_argv_with_absolute_paths(self):
-        argv, cwd, values, output = self.runner.command('train', {
+        argv, cwd, values, output, env = self.runner.command('train', {
             'snapshot': 'data/biometrics.db', 'watchJson': str(self.fixture.data / 'watch.json'), 'side': 'left',
             'timezone': 'America/Los_Angeles', 'name': '--pod 192.168.1.88', 'notes': 'line one\nline two',
             'out': 'data/runs/first'})
@@ -249,33 +252,46 @@ class ValidationTests(unittest.TestCase):
         self.assertIn(f'--export=12={self.fixture.data}/session.tar.gz', argv)
         self.assertIn('--workers=4', argv)
 
-    def test_archive_pull_runs_the_scheduled_core_command(self):
-        data = self.fixture.data
-        self.refuse('archive-pull', {}, 'Set "pod"')
-        core = self.fixture.root / 'core'
-        settings = {'pod': '-rf', 'coreCheckout': str(core)}
-        (data / 'workspace-settings.json').write_text(json.dumps(settings))
-        self.refuse('archive-pull', {}, 'Set "pod"')
-        (data / 'workspace-settings.json').write_text(json.dumps({**settings, 'pod': '192.168.1.88'}))
-        self.refuse('archive-pull', {}, 'biometrics:archive')
-        (core / 'scripts/biometrics-archive').mkdir(parents=True)
-        (core / 'package.json').write_text('{"scripts": {"biometrics:archive": "tsx scripts/biometrics-archive/cli.ts"}}')
-        (core / 'scripts/biometrics-archive/cli.ts').write_text('old')
-        self.refuse('archive-pull', {}, '--curl')
-        (core / 'scripts/biometrics-archive/cli.ts').write_text("option('--curl')")
-        self.refuse('archive-pull', {'pod': '10.0.0.1'}, 'Unknown parameters')
-        argv, cwd, values, output = self.runner.command('archive-pull', {})
+    def test_archive_pull_is_resolved_by_the_agent_script(self):
+        data, root = self.fixture.data, self.fixture.root
+        bin_dir = root / 'bin'
+        bin_dir.mkdir()
+        (bin_dir / 'pnpm').write_text('#!/bin/sh\n')
+        (bin_dir / 'pnpm').chmod(0o755)
+        path = f'{os.environ["PATH"]}:{bin_dir}'
+        with patch.dict(os.environ, {'PATH': path}):
+            self.refuse('archive-pull', {}, 'no pod')
+            core = root / 'core'
+            settings = {'pod': '-rf', 'coreCheckout': str(core)}
+            (data / 'workspace-settings.json').write_text(json.dumps(settings))
+            self.refuse('archive-pull', {}, 'pod must be HOST')
+            (data / 'workspace-settings.json').write_text(json.dumps({**settings, 'pod': '192.168.1.88'}))
+            self.refuse('archive-pull', {}, 'not found')
+            (core / 'scripts/biometrics-archive').mkdir(parents=True)
+            (core / 'node_modules').mkdir()
+            (core / 'package.json').write_text('{"scripts": {"biometrics:archive": "tsx scripts/biometrics-archive/cli.ts"}}')
+            (core / 'scripts/biometrics-archive/cli.ts').write_text('old')
+            self.refuse('archive-pull', {}, '--curl')
+            (core / 'scripts/biometrics-archive/cli.ts').write_text("option('--curl')")
+            self.refuse('archive-pull', {'pod': '10.0.0.1'}, 'Unknown parameters')
+            argv, cwd, values, output, env = self.runner.command('archive-pull', {})
+            plist = subprocess.run(['bash', str(ROOT / 'scripts/install-archive-agent.sh'), '--dry-run', '--settings',
+                                    str(data / 'workspace-settings.json'), '--dest', str(data / 'archive')],
+                                   capture_output=True, text=True, check=True).stdout
         self.assertEqual(argv, ['pnpm', '-s', 'biometrics:archive', 'pull', '--pod', '192.168.1.88',
                                 '--dest', str(data / 'archive'), '--curl'])
         self.assertEqual((cwd, output), (core.resolve(), str(data / 'archive')))
-        self.assertEqual(archive_pull_command(data)[0], argv)
+        self.assertIn(env['PATH'].split(':')[0], plist)
+        # The nightly agent and the dashboard run the same pull.
+        self.assertIn(f"cd '{core.resolve()}' &amp;&amp; pnpm -s biometrics:archive pull --pod '192.168.1.88' "
+                      f"--dest '{data / 'archive'}' --curl", plist)
 
 
 class NoPodWritesTests(unittest.TestCase):
     """AGENTS.md: uploads, model selection or activation, and pod writes stay manual."""
     SCRIPTS = {'scripts/train.py', 'scripts/stage-backtest.py', 'scripts/fusion.py', 'scripts/vitals_reference.py',
                'scripts/movement_model.py'}
-    WRITES = re.compile(r'sleep-stages/model|watch-upload|/api/device|/api/settings|/api/schedules|'
+    WRITES = re.compile(r'sleep-stages/model/active|models/selected|watch-upload|/api/device|/api/settings|/api/schedules|'
                         r"method\s*=\s*['\"](PUT|POST|PATCH|DELETE)|['\"]-X['\"]|--request", re.I)
 
     def test_action_allow_list_is_fixed(self):
@@ -285,12 +301,13 @@ class NoPodWritesTests(unittest.TestCase):
             self.assertNotRegex(key + action['label'], re.compile('upload|activat|select|promot|deploy', re.I))
             flags = {f['flag'] for f in action['fields']}
             self.assertFalse(flags & {'--pod', '--holdout-final', '--dashboard'}, key)
-            if key != 'archive-pull':
+            if 'build' not in action:
                 self.assertEqual(action['argv'][:4], ['uv', 'run', '--locked', 'python'])
                 self.assertIn(action['argv'][4], self.SCRIPTS)
 
     def test_action_scripts_never_write_to_the_pod(self):
-        for path in self.SCRIPTS | {'scripts/fetch_pod.py', 'scripts/retrain-models.py', 'scripts/web_jobs.py'}:
+        for path in self.SCRIPTS | {'scripts/retrain-models.py', 'scripts/web_jobs.py',
+                                     'scripts/install-archive-agent.sh'}:
             matches = [m.group(0) for m in self.WRITES.finditer((ROOT / path).read_text())]
             self.assertEqual(matches, [], path)
 
