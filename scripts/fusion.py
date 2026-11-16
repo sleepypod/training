@@ -39,6 +39,7 @@ def load(name, filename):
 
 fa = load('feature_ablation', 'feature-ablation.py')
 sb = load('stage_backtest', 'stage-backtest.py')
+from hashing import file_sha256
 import holdout as ho
 import movement_model as mm
 import vitals_reference as vr
@@ -185,7 +186,7 @@ def main():
     if args.holdout_final:
         ho.refuse_final(ap, 'fusion compares feature arms')
     data = json.loads(args.features.read_text())
-    if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
+    if data['sources']['snapshot'] != file_sha256(args.snapshot):
         raise ValueError('Snapshot does not match the one these features were exported from')
     movement = json.loads(args.movement_epochs.read_text())
     if movement.get('version') != 'movement-epochs-v2':

@@ -6,7 +6,7 @@ import Database from 'better-sqlite3'
 import { z } from 'zod'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, readSync, closeSync } from 'node:fs'
 import { filterModelOutliers, stageModelFeatures, STAGE_MODEL_CONTRACTS } from '../vendor/core/src/lib/personal-stage-model'
 import { DEFAULT_STAGE_RULESET } from '../vendor/core/src/lib/sleep-stage-rules'
 import { runStageClassifier } from '../vendor/core/src/lib/sleep-stages'
@@ -54,7 +54,17 @@ for (const record of records) {
   const group = new Date((record.s - 12 * 3600) * 1000).toLocaleDateString('en-CA', { timeZone })
   nights.push({ id: record.id, group, start: record.s, end: record.e, watchEpochs: refs.filter(r => r.length === 1).length, rows })
 }
-const hash = (path: string | URL) => createHash('sha256').update(readFileSync(path)).digest('hex')
+// Chunked, so a large archive database is never read into memory at once.
+const hash = (path: string | URL) => {
+  const digest = createHash('sha256'), buffer = Buffer.alloc(1 << 22), fd = openSync(path, 'r')
+  try {
+    for (let n; (n = readSync(fd, buffer, 0, buffer.length, null)) > 0;) digest.update(buffer.subarray(0, n))
+  }
+  finally {
+    closeSync(fd)
+  }
+  return digest.digest('hex')
+}
 mkdirSync(dirname(output), { recursive: true })
 writeFileSync(output, JSON.stringify({ version: 1, side, timeZone, podStageSource: podStages ? 'pod-api' : 'replayed-rules', features: columns, contract, ruleset, sources: { ...(podStages ? { podStages: hash(podPath) } : {}), ...(existsSync(join(dirname(snapshot), 'acquisition.json')) ? { acquisition: hash(join(dirname(snapshot), 'acquisition.json')) } : {}), coreCommit: JSON.parse(readFileSync(new URL('../vendor/core-source.json', import.meta.url), 'utf8')).commit, vendorManifest: hash(new URL('../vendor/core-source.json', import.meta.url)), snapshot: hash(snapshot), watch: hash(watchPath), featureCode: hash(new URL('../vendor/core/src/lib/personal-stage-model.ts', import.meta.url)) }, nights }), { flag: 'wx' })
 db.close()

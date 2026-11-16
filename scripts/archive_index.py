@@ -25,6 +25,7 @@ import sys
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hashing import file_sha256
 import lineage as ln
 import raw_piezo as rp
 from run_history import primary_root
@@ -53,14 +54,6 @@ OLDEST_GAP_MS = 3600 * 1000
 TEACHERS = ('stages', 'heartRate', 'breathingRate', 'hrvSdnn', 'motion')
 LETTERS = dict(stages='S', heartRate='H', breathingRate='B', hrvSdnn='V', motion='M')
 SIDECAR_KEYS = dict(stages='stages', heartRate='heartRate', breathingRate='respiratoryRate', hrvSdnn='hrvSdnn')
-
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, 'rb') as f:
-        while chunk := f.read(1 << 22):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def piezo_runs(raw):
@@ -188,7 +181,7 @@ def archive_coverage(files, records, cache, workers=4, log=print):
 
 def export_coverage(paths, cache, workers=4, log=print):
     """{path: merged piezo runs} for /api/export/archive tarballs."""
-    hashes = {str(p): sha256_file(p) for p in paths}
+    hashes = {str(p): file_sha256(p) for p in paths}
     out, todo = {}, []
     for path, sha in hashes.items():
         files = cache.export(sha)
@@ -350,7 +343,7 @@ def build_index(pod_dir, time_zone, side=None, exports=(), storage=None, stage_m
     archive_db = pod_dir / 'biometrics.db'
     return dict(version=VERSION, generatedAt=datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat(timespec='seconds'),
                 podId=pod_dir.name, timezone=time_zone, nightGrouping='noon-to-noon local date of entered_bed_at',
-                archive=dict(path=display_path(pod_dir), databaseSha256=sha256_file(archive_db), pulls=len(pulls),
+                archive=dict(path=display_path(pod_dir), databaseSha256=file_sha256(archive_db), pulls=len(pulls),
                              cursor=pulls[-1]['cursor']['end'] if pulls and pulls[-1].get('cursor') else None,
                              lastPullAt=pulls[-1]['pulledAt'] if pulls else None, missingRawFiles=absent),
                 localExports=[display_path(p) for p in exports],

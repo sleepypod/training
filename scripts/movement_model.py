@@ -30,6 +30,7 @@ from scipy.stats import spearmanr
 from sklearn.ensemble import RandomForestClassifier
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hashing import file_sha256
 import movement as mv
 import movement_portable as portable
 import piezo_bandwidth as pb
@@ -218,7 +219,7 @@ def one_session(job):
     if Path(source).is_dir():
         identity = dict(archiveRawSha256=[sha for _, _, sha in rp.archive_window(source, night['start'], night['end'])])
     else:
-        identity = dict(exportSha256=hashlib.sha256(Path(source).read_bytes()).hexdigest())
+        identity = dict(exportSha256=file_sha256(source))
     return night['id'], session_windows(recs, side, night['rows'], movement), len(errors), identity
 
 
@@ -257,7 +258,7 @@ def cmd_epochs(args):
     if out.exists():
         raise SystemExit(f'{out} exists; choose a new path')
     data = json.loads(Path(args.features).read_text())
-    if data['sources']['snapshot'] != hashlib.sha256(Path(args.snapshot).read_bytes()).hexdigest():
+    if data['sources']['snapshot'] != file_sha256(args.snapshot):
         raise ValueError('Snapshot does not match the one these features were exported from')
     bundle = joblib.load(args.model)
     if 'teaching' not in bundle:
@@ -298,7 +299,7 @@ def cmd_epochs(args):
     out.write_text(json.dumps(dict(version='movement-epochs-v2', features=list(EPOCH_FEATURES), epochSeconds=EPOCH,
                                    teachingNights=teaching_nights,
                                    crossFitting='rows: model without the session\'s own Watch-motion nights; excluding[T]: also without night T',
-                                   modelSha256=hashlib.sha256(Path(args.model).read_bytes()).hexdigest(),
+                                   modelSha256=file_sha256(args.model),
                                    inputSha256=hashlib.sha256(Path(args.features).read_bytes()).hexdigest(), sessions=sessions)))
     print(f'Wrote {out}')
 
@@ -316,7 +317,7 @@ def cmd_export(args):
         x, labels, nights = matrix(rows), np.asarray([r['label'] for r in rows]), np.asarray([r['night'] for r in rows])
     else:
         raise SystemExit(f'{args.model} has no teaching windows; pass the --windows it was trained on')
-    digest = hashlib.sha256(Path(args.model).read_bytes()).hexdigest()
+    digest = file_sha256(args.model)
     write_portable(bundle['final'], x, labels, nights, f'movement_model.py export of model.joblib sha256 {digest}', out)
 
 

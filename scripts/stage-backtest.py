@@ -29,6 +29,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hashing import file_sha256
 spec = importlib.util.spec_from_file_location('feature_ablation', Path(__file__).with_name('feature-ablation.py'))
 fa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fa)
@@ -361,7 +362,7 @@ def trial(ap, args):
     summary = trial_summary(rows, args.side, live['id'], base['id'], np.random.default_rng(42))
     protocol = dict(scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), side=args.side, after=args.after,
         nights=list(groups), inputSha256=hashlib.sha256(features.read_bytes()).hexdigest(), sources=data['sources'],
-        snapshotSha256=hashlib.sha256(args.snapshot.read_bytes()).hexdigest() if args.snapshot else None,
+        snapshotSha256=file_sha256(args.snapshot) if args.snapshot else None,
         models=models, holdout=dict(ho.protocol(), lockedGroups=locked, lockedUse='included: both models are frozen and deployed; each read logged as trial'),
         alignment='Watch 5-minute epochs from export-runtime-features.ts; each model\'s stage at the epoch midpoint; both scored on the same labelled epochs',
         outOfSample='a night counts only after the model\'s training cutoff', prospective=True, podWrites='none: GETs and the read-only model preview')
@@ -411,7 +412,7 @@ def main():
     if not (args.features and args.snapshot and args.out):
         ap.error('the backtest needs features, --snapshot and --out')
     data = json.loads(args.features.read_text())
-    if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
+    if data['sources']['snapshot'] != file_sha256(args.snapshot):
         raise ValueError('Snapshot does not match the one these features were exported from')
     args.out.mkdir(parents=True, exist_ok=True)
     if any(args.out.iterdir()):
