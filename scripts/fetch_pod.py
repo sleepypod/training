@@ -41,6 +41,10 @@ def iso(ms):
     return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec='milliseconds')
 
 
+# POST routes that store nothing on the pod; every other POST is a write and stays manual (AGENTS.md).
+READ_ONLY_POSTS = frozenset({'sleep-stages/model/preview'})
+
+
 class Pod:
     def __init__(self, address, output):
         self.base = base_url(address)
@@ -68,6 +72,8 @@ class Pod:
 
     def post(self, path, body):
         """A POST route that only reads (model preview); recorded like a GET, with the body's hash."""
+        if path not in READ_ONLY_POSTS:
+            raise ValueError(f'POST {path} is not a read-only route; pod writes stay manual')
         payload = json.dumps(body, separators=(',', ':')).encode()
         request = urllib.request.Request(self.base + '/api/' + path, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
         with open_url(self.opener, request, 120) as response:
