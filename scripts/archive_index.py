@@ -6,7 +6,9 @@ coverage of the in-bed seconds and where that raw lives (`archive`, or
 existed), Watch teachers per type (pod rows preferred, else the night's sidecar under
 watch/<night>.json), vitals lineage (lineage.py), whether the night is in the locked
 holdout, and whether its raw is at risk: only on the pod and within 3 days of the pod's
-oldest raw, which the pruner deletes next. At-risk nights print first.
+oldest raw, which the pruner deletes next. At-risk nights print first. `overlaps` lists other
+same-side records sharing in-bed time; `supersededBy` marks the old copy of a record edited
+on the pod, which export-runtime-features.ts never trains on.
 
 Writes <archive>/index.json. Reads local files only; never contacts the pod. Decoded
 raw coverage is cached by RAW file SHA-256 under data/cache/raw-coverage/.
@@ -323,6 +325,7 @@ def build_index(pod_dir, time_zone, side=None, exports=(), storage=None, stage_m
         teachers = Teachers(db, load_sidecars(pod_dir))
         lineage = {r['sleepRecordId']: r for r in ln.night_lineage(ln.Lineage(db), pulls, records, time_zone, stage_models)}
         oldest = raw_oldest(storage, pulls, now_ms)
+        copies, overlapping = ln.superseded(db), ln.overlaps(records)
         sources = {'archive': archived, **{f'local-export:{display_path(p)}': runs for p, runs in local.items()}}
         every = merge([r for runs in sources.values() for r in runs])
         nights = []
@@ -342,6 +345,7 @@ def build_index(pod_dir, time_zone, side=None, exports=(), storage=None, stage_m
                 watch=watch, watchMissing=[t for t in TEACHERS if watch[t]['source'] is None],
                 sidecar=any(w['source'] == 'sidecar' for w in watch.values()),
                 lineage={k: lineage[record_id][k] for k in ('vitals', 'build', 'stage')},
+                overlaps=overlapping.get(record_id, []), supersededBy=copies.get(record_id),
                 locked=locked(night), atRisk=at_risk))
     archive_db = pod_dir / 'biometrics.db'
     return dict(version=VERSION, generatedAt=datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat(timespec='seconds'),
@@ -372,12 +376,14 @@ def table(index):
             source = 'local-export:' + Path(source.split(':', 1)[1]).name
         lines.append(f"{n['night']:10} {n['side']:5} {n['inBedHours']:5.1f} {n['raw']['coverage']:5.0%} {source[:28]:28} "
                      f"{watch_cell(n['watch']):5} {ln.vitals_label(n['lineage']['vitals'])[:22]:22} {'yes' if n['locked'] else '':4} "
-                     f"{'AT RISK' if n['atRisk'] else '?' if n['atRisk'] is None else ''}")
+                     f"{'AT RISK' if n['atRisk'] else '?' if n['atRisk'] is None else ''}"
+                     f"{' superseded by ' + str(n['supersededBy']) if n['supersededBy'] else ''}".rstrip())
     history = index['rawHistory']
     lines.append(f"Watch: S stages, H heart rate, B breathing, V HRV SDNN, M motion; capital = pod rows, lower case = sidecar, . = missing.")
     lines.append(f"Pod oldest raw: {history['oldest'] or 'unknown'} ({history['basis']}{', as of ' + history['asOf'] if history['asOf'] else ''}). "
                  f"{sum(1 for n in index['nights'] if n['atRisk'])} at risk, {sum(1 for n in index['nights'] if n['raw']['source'] == 'lost')} lost, "
-                 f"{sum(1 for n in index['nights'] if n['watchMissing'])} missing a Watch teacher.")
+                 f"{sum(1 for n in index['nights'] if n['watchMissing'])} missing a Watch teacher, "
+                 f"{sum(1 for n in index['nights'] if n['supersededBy'])} superseded by an edited copy (never trained on).")
     if history['basis'] == 'unknown':
         lines.append('Save GET /api/system/storage to a file and pass --storage to flag nights at risk.')
     return lines

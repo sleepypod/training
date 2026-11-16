@@ -21,7 +21,7 @@ from test_piezo_bandwidth import cbor, outer
 SCRIPT = Path(__file__).with_name('install-archive-agent.sh')
 SCHEMA = '''
 CREATE TABLE sleep_records (id INTEGER PRIMARY KEY, side TEXT NOT NULL, entered_bed_at INTEGER NOT NULL, left_bed_at INTEGER NOT NULL,
-  sleep_duration_seconds INTEGER NOT NULL DEFAULT 0);
+  sleep_duration_seconds INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE vitals (id INTEGER PRIMARY KEY, side TEXT NOT NULL, timestamp INTEGER NOT NULL, heart_rate REAL, hrv REAL,
   breathing_rate REAL, processing_run_id TEXT);
 CREATE TABLE biometric_processing_runs (id TEXT PRIMARY KEY, side TEXT NOT NULL, kind TEXT NOT NULL, bundle TEXT NOT NULL,
@@ -163,6 +163,19 @@ class ArchiveIndexTests(unittest.TestCase):
         self.assertEqual((identities['2026-11-20']['identity'], identities['2026-11-20']['unknownMinutes']), ('mixed', 31), 'partly recorded')
         self.assertEqual(archived['lineage']['build']['commit'], 'abc1234def')
 
+    def test_an_edited_record_marks_its_old_copy_and_overlaps_are_listed(self):
+        archived = NIGHTS['2026-11-14']
+        with sqlite3.connect(self.pod / 'biometrics.db') as db:
+            # Record 3 edited on the pod (same created_at, later archive id), and a separate record sharing its time.
+            db.execute("insert into sleep_records (id, side, entered_bed_at, left_bed_at, created_at) values (6, 'left', ?, ?, 0)", (archived + 600, archived + HOUR))
+            db.execute("insert into sleep_records (id, side, entered_bed_at, left_bed_at, created_at) values (7, 'left', ?, ?, 5)", (archived + 1800, archived + 2 * HOUR))
+        nights = {n['sleepRecordId']: n for n in self.index()['nights']}
+        self.assertEqual((nights[3]['supersededBy'], nights[6]['supersededBy'], nights[7]['supersededBy']), (6, None, None))
+        self.assertEqual((nights[3]['overlaps'], nights[6]['overlaps'], nights[7]['overlaps']), ([6, 7], [3, 7], [3, 6]))
+        self.assertEqual(nights[1]['overlaps'], [], 'records that only share created_at are neither copies nor overlaps')
+        self.assertIsNone(nights[1]['supersededBy'])
+        self.assertIn('superseded by 6', next(line for line in ai.table(self.index()) if line.startswith('2026-11-14') and 'superseded' in line))
+
     def test_at_risk_nights_print_first(self):
         lines = ai.table(self.index())
         self.assertTrue(lines[1].startswith('2026-11-15') and lines[1].rstrip().endswith('AT RISK'), lines[:3])
@@ -239,6 +252,59 @@ class SidecarTests(unittest.TestCase):
     def test_import_needs_parser_output(self):
         with self.assertRaises(SystemExit):
             ws.import_sidecars(self.pod, 'left', 'UTC', self.write('x.json', {'nope': []}))
+
+
+class TrainingCopiesTests(unittest.TestCase):
+    """export-runtime-features.ts trains on the newest copy of an edited record only."""
+
+    def export(self, created_at=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = sqlite3.connect(root / 'biometrics.db')
+            db.executescript('''
+            CREATE TABLE biometric_runtime_configs (side TEXT, generation INTEGER, payload TEXT);
+            CREATE TABLE calibration_profiles (side TEXT, sensor_type TEXT, quality_score REAL);
+            CREATE TABLE vitals (side TEXT, timestamp INTEGER, heart_rate REAL, hrv REAL, breathing_rate REAL);
+            CREATE TABLE movement (side TEXT, timestamp INTEGER, total_movement INTEGER);
+            ''')
+            db.execute('CREATE TABLE sleep_records (id INTEGER PRIMARY KEY, side TEXT, entered_bed_at INTEGER, left_bed_at INTEGER'
+                       + (', created_at INTEGER)' if created_at else ')'))
+            start = ts('2026-11-14T06:00')
+            # 1: the old copy of 9 (edited on the pod: same created_at, later id); 2: a later night; 3: overlaps 2 but is its own record.
+            records = [(1, start, start + 4 * HOUR, 100), (9, start + 900, start + 4 * HOUR, 100),
+                       (2, start + 86400, start + 86400 + 4 * HOUR, 200), (3, start + 86400 + HOUR, start + 86400 + 5 * HOUR, 300)]
+            for record_id, a, b, created in records:
+                db.execute('insert into sleep_records values (?, ?, ?, ?' + (', ?)' if created_at else ')'),
+                           (record_id, 'left', a, b, *([created] if created_at else [])))
+            stages = []
+            for day in (0, 86400):
+                for minute in range(0, 5 * 60):
+                    t = start + day + minute * 60
+                    db.execute("insert into vitals values ('left', ?, ?, 40, 14)", (t, 55 + minute % 7))
+                    db.execute("insert into movement values ('left', ?, ?)", (t, minute % 5))
+                stages += [[(start + day + e * 300) * 1000, (start + day + (e + 1) * 300) * 1000, ['light', 'deep', 'rem', 'wake'][e // 6 % 4]] for e in range(60)]
+            db.commit()
+            db.close()
+            (root / 'watch.json').write_text(json.dumps({'stages': stages}))
+            tsx = Path(__file__).resolve().parents[1] / 'node_modules/.bin/tsx'
+            subprocess.run([str(tsx), str(Path(__file__).with_name('export-runtime-features.ts')), str(root / 'biometrics.db'), str(root / 'watch.json'),
+                            str(root / 'features.json'), 'left', 'UTC'], check=True, capture_output=True, timeout=120)
+            return [n['id'] for n in json.loads((root / 'features.json').read_text())['nights']]
+
+    def test_only_the_newest_copy_of_an_edited_record_is_a_training_session(self):
+        self.assertEqual(self.export(), [9, 2, 3])
+
+    def test_snapshots_without_created_at_keep_every_record(self):
+        self.assertEqual(self.export(created_at=False), [1, 9, 2, 3])
+
+    def test_the_index_and_the_export_agree_on_which_copy_is_old(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = sqlite3.connect(Path(tmp) / 'b.db')
+            db.execute('CREATE TABLE sleep_records (id INTEGER PRIMARY KEY, side TEXT, entered_bed_at INTEGER, left_bed_at INTEGER, created_at INTEGER)')
+            db.executemany('insert into sleep_records values (?, ?, ?, ?, ?)',
+                           [(1, 'left', 0, 100, 7), (4, 'left', 10, 100, 7), (8, 'left', 20, 90, 7), (5, 'right', 0, 100, 7), (6, 'left', 200, 300, 7)])
+            self.assertEqual(ln.superseded(db), {1: 8, 4: 8})
+            db.close()
 
 
 class LineageCliTests(unittest.TestCase):
