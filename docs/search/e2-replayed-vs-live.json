@@ -1,0 +1,26 @@
+{
+  "name": "e2-replayed-vs-live",
+  "side": "left",
+  "timezone": "America/Los_Angeles",
+  "inputs": {
+    "snapshot": "data/archive/POD_ID/biometrics.db",
+    "archive": "data/archive/POD_ID",
+    "core": "../sleepypod-core",
+    "watch": "data/watch/watch.json",
+    "watchVitals": "data/watch/watch-vitals.json",
+    "exports": {
+      "2026-10-18": "data/raw/sleep-20261114/session-1184.tar.gz",
+      "2026-10-19": "data/raw/sleep-20261114/session-1194.tar.gz"
+    }
+  },
+  "primary": { "candidate": "replayed+none+podContext", "baseline": "live+none+podContext", "metric": "macroF1" },
+  "space": {
+    "vitals": [
+      { "id": "live", "profile": "live" },
+      { "id": "replayed", "config": "defaults" }
+    ],
+    "movementModel": ["none"],
+    "stage": [{ "id": "podContext", "contract": "podContext", "model": "balanced_leaf5" }]
+  },
+  "budget": { "maxCandidates": 2 }
+}

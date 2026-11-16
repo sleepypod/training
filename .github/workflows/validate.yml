@@ -43,3 +43,18 @@ jobs:
       - run: >-
           uv run --locked python scripts/stage-backtest.py data/smoke-graph/features.json
           --snapshot data/smoke-graph/derived/biometrics.db --out data/smoke-graph/backtest
+      - run: >-
+          uv run --locked python scripts/make-synthetic-inputs.py data/smoke-search --nights 14
+          --start 2026-11-03 --watch-vitals --replay data/smoke-search/replay
+      - run: uv run --locked python scripts/derive_snapshot.py ingest data/smoke-search/replay --cache data/smoke-search/cache/vitals
+      - run: uv run --locked python scripts/parse-watch-export.py data/smoke-search/export.zip data/smoke-search/watch.json
+      - run: >-
+          uv run --locked python scripts/parse-watch-export.py data/smoke-search/export.zip
+          data/smoke-search/watch-vitals.json --vitals
+      - run: >-
+          uv run --locked python scripts/search.py plan docs/search/synthetic.json
+          --out data/smoke-search/run --cache data/smoke-search/cache
+      - run: uv run --locked python scripts/search.py run data/smoke-search/run --jobs 2
+      - run: >-
+          uv run --locked python scripts/search.py final data/smoke-search/run
+          --candidate replayed+none+podContext --access-log data/smoke-search/holdout-access.jsonl

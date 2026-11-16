@@ -1,0 +1,20 @@
+{
+  "name": "synthetic-search",
+  "side": "left",
+  "timezone": "UTC",
+  "inputs": {
+    "snapshot": "data/smoke-search/biometrics.db",
+    "watch": "data/smoke-search/watch.json",
+    "watchVitals": "data/smoke-search/watch-vitals.json"
+  },
+  "primary": { "candidate": "replayed+none+podContext", "baseline": "live+none+podContext", "metric": "macroF1" },
+  "space": {
+    "vitals": [{ "id": "live", "profile": "live" }, { "id": "replayed", "config": "defaults" }],
+    "movementModel": ["none"],
+    "stage": [
+      { "id": "podContext", "contract": "podContext", "model": "balanced_leaf5" },
+      { "id": "quality-wakeFirst", "contract": "podNative", "groups": ["context", "movement", "arousal", "quality"], "model": "hierarchical" }
+    ]
+  },
+  "budget": { "maxCandidates": 4 }
+}

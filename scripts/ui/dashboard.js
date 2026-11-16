@@ -2493,6 +2493,8 @@ const taskOf = {
     'snore-session': 'snore',
     'snore-night': 'snore',
     'snore-labels': 'snore',
+    // Model search runs have no view yet (plan B5); this keeps them out of the sleep list.
+    search: 'search',
   },
   taskTitle = {
     sleep: 'SLEEP STAGE EXPERIMENT',

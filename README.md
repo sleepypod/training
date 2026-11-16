@@ -529,6 +529,13 @@ never used. Every other night keeps its stored rows. Each night's verdict, core'
 values and the reason are recorded in `derived_snapshot`. The thresholds are core's and rest
 on two real nights so far, so treat a pass as a coarse check, not proof of parity.
 
+`scripts/search.py` searches over vitals profiles, movement models and stage models on one
+fixed protocol: locked holdout, walk-forward, cross-fitting, paired night bootstrap and one
+pre-registered comparison. Each node's output is cached once per version, and the single
+locked-holdout read ends in `RUN/model/set.json`. See [docs/search.md](docs/search.md)
+for specs, the protocol and the prepared E2 run. The synthetic final above uses its own
+access log, so synthetic reads never count against the real holdout.
+
 `scripts/modelset.py` writes `RUN/model/set.json` (`modelset-v1`) next to an exported model:
 the stage model pinned by core's own hash (`modelset.py hash candidate.json`; the canonical JSON
 is ported once, in `scripts/canonical_json.py`, and pinned to vectors core computed), the vitals engine and profile it
@@ -650,6 +657,15 @@ uv run --locked python scripts/parse-watch-export.py data/smoke-graph/export.zip
 npm run features -- data/smoke-graph/derived/biometrics.db data/smoke-graph/watch.json data/smoke-graph/features.json left UTC podContext
 uv run --locked python scripts/stage-backtest.py data/smoke-graph/features.json \
   --snapshot data/smoke-graph/derived/biometrics.db --out data/smoke-graph/backtest
+uv run --locked python scripts/make-synthetic-inputs.py data/smoke-search --nights 14 --start 2026-11-03 \
+  --watch-vitals --replay data/smoke-search/replay
+uv run --locked python scripts/derive_snapshot.py ingest data/smoke-search/replay --cache data/smoke-search/cache/vitals
+uv run --locked python scripts/parse-watch-export.py data/smoke-search/export.zip data/smoke-search/watch.json
+uv run --locked python scripts/parse-watch-export.py data/smoke-search/export.zip data/smoke-search/watch-vitals.json --vitals
+uv run --locked python scripts/search.py plan docs/search/synthetic.json --out data/smoke-search/run --cache data/smoke-search/cache
+uv run --locked python scripts/search.py run data/smoke-search/run --jobs 2
+uv run --locked python scripts/search.py final data/smoke-search/run --candidate replayed+none+podContext \
+  --access-log data/smoke-search/holdout-access.jsonl
 ```
 
 To also exercise pod fetching against a synthetic local HTTP server:

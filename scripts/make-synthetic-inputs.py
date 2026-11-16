@@ -14,6 +14,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('output', type=Path)
     ap.add_argument('--nights', type=int, default=5, help='Synthetic nights, one 3 h session each')
+    ap.add_argument('--start', default='2024-01-01', help='Date of the first synthetic night (sessions start 22:00 UTC)')
+    ap.add_argument('--watch-vitals', action='store_true', help='Also add Watch heart rate, respiratory rate and SDNN samples')
     ap.add_argument('--replay', type=Path, help='Also write a synthetic core local-fit replay output here (replay.json + readings/)')
     args = ap.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
@@ -26,10 +28,11 @@ def main():
     CREATE TABLE vitals_quality (vitals_id INTEGER, side TEXT, timestamp INTEGER, quality_score REAL, flags TEXT, hr_raw REAL, created_at INTEGER);
     CREATE TABLE movement (side TEXT, timestamp INTEGER, total_movement REAL);
     ''')
+    first = int(datetime.fromisoformat(args.start).replace(hour=22, tzinfo=timezone.utc).timestamp())
     root = ET.Element('HealthData')
     stages = ['Awake', 'AsleepCore', 'AsleepDeep', 'AsleepREM']
     for night in range(args.nights):
-        start = 1704146400 + night * 86400  # Fixed synthetic dates, 3h/night.
+        start = first + night * 86400  # Fixed synthetic dates, 3h/night.
         db.execute('INSERT INTO sleep_records VALUES (?, ?, ?, ?)', (night, 'left', start, start + 10800))
         for minute in range(180):
             stage = (minute // 15 + night) % 4
@@ -44,21 +47,26 @@ def main():
                          startDate=datetime.fromtimestamp(start + epoch * 300, timezone.utc).isoformat(),
                          endDate=datetime.fromtimestamp(start + (epoch + 1) * 300, timezone.utc).isoformat())
             ET.SubElement(root, 'Record', attrs)
+            if args.watch_vitals:
+                at = datetime.fromtimestamp(start + epoch * 300 + 120, timezone.utc).isoformat()
+                for kind, value in (('HeartRate', 57 + stage * 4.2), ('RespiratoryRate', 12.4 + stage * 0.3), ('HeartRateVariabilitySDNN', 35 + stage * 6)):
+                    ET.SubElement(root, 'Record', dict(type='HKQuantityTypeIdentifier' + kind, sourceName='Synthetic Apple Watch',
+                                                       value=f'{value + 0.1 * (epoch % 3):.1f}', startDate=at, endDate=at))
     db.commit(); db.close()
     with zipfile.ZipFile(args.output / 'export.zip', 'w') as archive:
         archive.writestr('apple_health_export/export.xml', ET.tostring(root))
     if args.replay:
-        write_replay(args.replay, args.nights)
+        write_replay(args.replay, args.nights, first)
     print(f'Synthetic inputs created: {args.output}')
 
 
-def write_replay(output, nights):
+def write_replay(output, nights, first):
     """Invented readings in core's `biometrics:local-fit replay` layout, for derive_snapshot.py."""
     engine, profile, other = (hashlib.sha256(f'synthetic-{k}'.encode()).hexdigest() for k in ('engine', 'profile', 'defaults'))
     (output / 'readings').mkdir(parents=True, exist_ok=False)
     rows = []
     for night in range(nights):
-        start = 1704146400 + night * 86400
+        start = first + night * 86400
         key = datetime.fromtimestamp(start, timezone.utc).date().isoformat()
         readings = []
         for minute in range(180):
