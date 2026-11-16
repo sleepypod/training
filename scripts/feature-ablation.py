@@ -27,6 +27,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hashing import file_sha256
 spec = importlib.util.spec_from_file_location('retraining', Path(__file__).with_name('retrain-models.py'))
 rm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rm)
@@ -186,7 +187,7 @@ def main():
     if args.holdout_final:
         ho.refuse_final(ap, 'an ablation selects among feature arms')
     data = json.loads(args.features.read_text())
-    if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
+    if data['sources']['snapshot'] != file_sha256(args.snapshot):
         raise ValueError('Snapshot does not match the one these features were exported from')
     holdout = ho.record({n['group'] for n in data['nights']})
     nights, features, ruleset, side = ho.drop_locked(data['nights']), data['features'], data['ruleset'], data['side']

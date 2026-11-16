@@ -19,6 +19,7 @@ import numpy as np
 from scipy.stats import spearmanr
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hashing import file_sha256
 spec = importlib.util.spec_from_file_location('feature_ablation', Path(__file__).with_name('feature-ablation.py'))
 fa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fa)
@@ -107,7 +108,7 @@ def main():
     ap.add_argument('--out', type=Path, required=True)
     args = ap.parse_args()
     data = json.loads(args.features.read_text())
-    if data['sources']['snapshot'] != hashlib.sha256(args.snapshot.read_bytes()).hexdigest():
+    if data['sources']['snapshot'] != file_sha256(args.snapshot):
         raise ValueError('Snapshot does not match the one these features were exported from')
     args.out.mkdir(parents=True, exist_ok=True)
     if any(args.out.iterdir()):
