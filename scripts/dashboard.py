@@ -11,7 +11,8 @@ from threading import Thread
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from run_history import Catalog, local_data_roots, read_json, run_kind
+import archive_status
+from run_history import Catalog, local_data_roots, primary_root, read_json, run_kind
 from web_jobs import JobError, JobRunner
 
 UI = Path(__file__).with_name('ui')
@@ -111,7 +112,7 @@ def write_report(output):
     temp.replace(root / 'index.html')
 
 
-def serve(output=None, catalog=None, port=0, jobs=None):
+def serve(output=None, catalog=None, port=0, jobs=None, sync=None):
     """Loopback viewer. With a JobRunner, also /api/jobs, guarded by a per-launch token in the page."""
     catalog = catalog or Catalog()
     key = catalog.register(output) if output else None
@@ -171,6 +172,8 @@ def serve(output=None, catalog=None, port=0, jobs=None):
                 data = html({'initialRun': key, 'jobToken': token}).encode()
             elif path == '/api/runs':
                 data = json.dumps(catalog.list(), allow_nan=False).encode()
+            elif path == '/api/archive':
+                data = json.dumps(archive_status.overview(jobs.data if jobs else primary_root() / 'data', sync), allow_nan=False).encode()
             elif path.startswith('/api/runs/'):
                 parts = path.split('/')
                 root = catalog.resolve(parts[3])
@@ -228,10 +231,14 @@ def main():
     ap.add_argument('--import-root', type=Path, action='append', default=[], help='Discover historical run folders under this directory')
     ap.add_argument('--catalog', type=Path, help='Override the shared local SQLite catalog')
     ap.add_argument('--port', type=int, default=8765)
+    ap.add_argument('--no-sync', action='store_true', help='Do not pull the pod archive on open and every 6 h')
     args = ap.parse_args()
     catalog = Catalog(args.catalog)
     catalog.discover(local_data_roots() + args.import_root)
-    server = serve(args.run, catalog, args.port, JobRunner(catalog))
+    jobs = JobRunner(catalog)
+    sync = None if args.no_sync else archive_status.AutoSync(jobs)
+    server = serve(args.run, catalog, args.port, jobs, sync)
+    if sync: sync.start()
     print(f'Training workspace: http://127.0.0.1:{server.server_port}', flush=True)
     try:
         while True: time.sleep(1)
@@ -239,6 +246,7 @@ def main():
         pass
     finally:
         # A job belongs to this launch: interrupt it rather than leave it unrecorded.
+        if sync: sync.stop()
         server.jobs.stop()
         server.shutdown(); server.server_close()
 

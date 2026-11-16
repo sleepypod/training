@@ -78,9 +78,21 @@ const glossary = {
     'Actions · jobs',
     'Actions run this repository’s own training and evaluation scripts on files already in data/, one job at a time, the same way the terminal would. Each job keeps its exact command and log in data/web-jobs and is listed with its status; a job that writes a run adds it to the run list. No action uploads, selects or activates a model, or writes to the pod: those steps stay manual. Closing the workspace interrupts a running job.',
   ],
+  archive: [
+    'Pod archive',
+    'The pod deletes its oldest raw recordings once its disk passes 80%, about 27 days back. The archive keeps a copy on this computer: core’s pull (scripts/install-archive-agent.sh runs it nightly at 12:30, and this workspace runs it when it opens and every 6 hours while open) copies the pod’s database and raw files into data/archive. Each night shows how much of its time in bed has raw piezo here (raw coverage) and where it lives. At risk means the raw is only on the pod and within 3 days of the oldest raw the pod still keeps, so the pruner deletes it next; lost means it is already gone. When the last successful pull is more than 3 days old, the nightly pull has probably stopped. The view reads index.json from scripts/archive_index.py; rebuild it after a pull.',
+  ],
+  watchTeachers: [
+    'Watch teachers',
+    'Watch data teaches the pod models but never feeds them. S is Watch sleep stages, H heart rate, B breathing rate, V HRV (SDNN) and M Watch motion. A capital letter means the rows came from the pod’s own copy of the phone’s upload; lower case means a sidecar file imported from an Apple Health export for a night the upload missed; a dot means that teacher is missing for the night.',
+  ],
+  lineage: [
+    'Vitals lineage',
+    'Which vitals engine and processing profile produced a night’s heart rate, breathing rate and HRV on the pod. Mixed means the night was processed by more than one version, for example across a deploy; models trained on mixed nights learn from inputs that changed partway through.',
+  ],
   tasks: [
     'Sleep · Movement · Snore',
-    'The workspace holds three kinds of research run. Sleep runs train and evaluate sleep-stage models. Movement runs compare a movement classifier with the pod’s own movement score. Snore runs record the piezo bandwidth gate and overnight snore-band energy. Each kind keeps its own views; switching task filters the run list.',
+    'The workspace holds three kinds of research run. Sleep runs train and evaluate sleep-stage models. Movement runs compare a movement classifier with the pod’s own movement score. Snore runs record the piezo bandwidth gate and overnight snore-band energy. Each kind keeps its own views; switching task filters the run list. Archive is not a run: it lists the nights copied off the pod.',
   ],
   cueLabels: [
     'Cue labels',
@@ -492,6 +504,7 @@ async function selectRun(id) {
   runId = id;
   const picked = runs.find((r) => r.id === id);
   if (picked) task = runTask(picked);
+  else if (task === 'archive') task = 'sleep';
   requestVersion++;
   lastPayload = '';
   allEvents = null;
@@ -535,8 +548,8 @@ async function poll() {
       lastRuns = text;
       renderRuns();
     }
-    $('empty').classList.toggle('hidden', runs.length > 0);
-    if (!runId && runs.length) {
+    $('empty').classList.toggle('hidden', runs.length > 0 || task === 'archive');
+    if (!runId && runs.length && task !== 'archive') {
       const hash = new URLSearchParams(location.hash.slice(1)),
         wanted = hash.get('run') || embedded.initialRun,
         asked = ['sleep', 'movement', 'snore'].includes(hash.get('task'));
@@ -2500,6 +2513,7 @@ const taskOf = {
     sleep: 'SLEEP STAGE EXPERIMENT',
     movement: 'MOVEMENT EXPERIMENT',
     snore: 'SNORE RESEARCH',
+    archive: 'POD ARCHIVE',
   },
   moveClasses = ['still', 'arm', 'leg', 'turn', 'sit', 'light', 'vigorous'],
   moveColors = {
@@ -3343,6 +3357,7 @@ function renderTaskSwitch() {
     b.setAttribute('aria-pressed', String(b.dataset.task === task));
     b.disabled = offline;
   });
+  document.body.classList.toggle('archive-view', task === 'archive');
 }
 // Both the task buttons and a #task= link with no matching runs land here.
 function taskEmpty() {
@@ -3378,6 +3393,349 @@ function taskEmpty() {
     ),
     n('code', command),
   );
+}
+// ---- Pod archive (plan B2): nights in data/archive/<podId>/index.json ----
+const teachers = ['stages', 'heartRate', 'breathingRate', 'hrvSdnn', 'motion'],
+  teacherNames = {
+    stages: 'Sleep stages',
+    heartRate: 'Heart rate',
+    breathingRate: 'Breathing rate',
+    hrvSdnn: 'HRV (SDNN)',
+    motion: 'Watch motion',
+  },
+  teacherLetters = {
+    stages: 'S',
+    heartRate: 'H',
+    breathingRate: 'B',
+    hrvSdnn: 'V',
+    motion: 'M',
+  };
+let archiveDoc = null,
+  archiveText = '',
+  archivePod = null,
+  archiveMessage = '';
+// Mirrors scripts/lineage.py vitals_label.
+function vitalsLabel(v) {
+  const short = (x) => (x == null ? '-' : String(x).slice(0, 8));
+  if (!v || v.identity == null) return 'no vitals';
+  if (v.identity === 'mixed')
+    return `mixed (${(v.versions || []).length}${v.unknownMinutes ? ' + unrecorded' : ''})`;
+  if (v.identity === 'unknown') return 'unknown';
+  return short(v.engine) + '/' + short(v.profile);
+}
+// Mirrors scripts/archive_index.py watch_cell: capital = pod rows, lower case = sidecar, . = missing.
+function watchCell(watch) {
+  return teachers
+    .map((t) =>
+      watch?.[t]?.source === 'pod'
+        ? teacherLetters[t]
+        : watch?.[t]?.source === 'sidecar'
+          ? teacherLetters[t].toLowerCase()
+          : '.',
+    )
+    .join('');
+}
+// At-risk nights first, then the newest night.
+function archiveNights(nights) {
+  return [...nights].sort(
+    (a, b) =>
+      (b.atRisk === true) - (a.atRisk === true) ||
+      b.enteredBedAt - a.enteredBedAt ||
+      a.side.localeCompare(b.side),
+  );
+}
+function archiveSummary(nights) {
+  const source = (n) => n.raw?.source || '';
+  return {
+    nights: nights.length,
+    archived: nights.filter(
+      (n) => source(n) === 'archive' || source(n).startsWith('local-export:'),
+    ).length,
+    atRisk: nights.filter((n) => n.atRisk === true).length,
+    lost: nights.filter((n) => source(n) === 'lost').length,
+    locked: nights.filter((n) => n.locked).length,
+    missingTeacher: nights.filter((n) => (n.watchMissing || []).length).length,
+    mixed: nights.filter((n) => n.lineage?.vitals?.mixed).length,
+  };
+}
+function teacherCoverage(nights) {
+  return teachers.map((t) => {
+    const count = (source) =>
+      nights.filter((n) => (n.watch?.[t]?.source ?? null) === source).length;
+    return [teacherNames[t], count('pod'), count('sidecar'), count(null)];
+  });
+}
+function lineageCounts(nights) {
+  const counts = new Map();
+  for (const n of nights) {
+    const label = vitalsLabel(n.lineage?.vitals);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]);
+}
+function pullAge(hours) {
+  if (hours == null) return 'never';
+  if (hours < 1) return 'under an hour ago';
+  return hours < 48
+    ? Math.round(hours) + ' h ago'
+    : (hours / 24).toFixed(1) + ' days ago';
+}
+function rawSource(source) {
+  if (!source) return '—';
+  return source.startsWith('local-export:')
+    ? 'local export · ' + source.split('/').pop()
+    : source;
+}
+async function showArchive() {
+  if (offline || task !== 'archive') return;
+  history.replaceState(null, '', '#task=archive');
+  if (!archiveDoc) renderArchive();
+  try {
+    const r = await fetch('/api/archive', { cache: 'no-store' });
+    if (!r.ok) throw Error();
+    const text = await r.text();
+    if (task !== 'archive' || text === archiveText) return;
+    archiveText = text;
+    archiveDoc = JSON.parse(text);
+    renderArchive();
+  } catch {
+    $('connection').textContent = 'Could not read the archive.';
+  }
+}
+async function archiveJob(action, params) {
+  const r = await fetch('/api/jobs', jobRequest(jobToken, { action, params })),
+    body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    archiveMessage = body.error || 'Could not start the job.';
+    renderArchive();
+    return;
+  }
+  archiveMessage = '';
+  jobId = body.id;
+  $('actions-dialog').showModal();
+  await pollJobs();
+}
+function renderArchive() {
+  tabs.forEach((name) => ($(name).hidden = true));
+  document.body.classList.add('task-view');
+  $('experiment-label').textContent = taskTitle.archive;
+  $('run-title').textContent = 'Pod archive';
+  $('detail').textContent = '';
+  const host = $('task-view');
+  host.hidden = false;
+  if (!archiveDoc) {
+    $('run-meta').textContent = 'Reading data/archive…';
+    host.replaceChildren();
+    return;
+  }
+  const pods = archiveDoc.pods || [];
+  if (!pods.some((p) => p.podId === archivePod)) archivePod = pods[0]?.podId;
+  const pod = pods.find((p) => p.podId === archivePod);
+  $('status').textContent = !pod
+    ? 'no archive'
+    : pod.pullOverdue
+      ? 'pull overdue'
+      : 'current';
+  $('status').className =
+    'badge ' + (!pod || pod.pullOverdue ? 'failed' : 'complete');
+  if (!pod) {
+    $('run-meta').textContent = 'No archive in data/archive yet.';
+    const p = panel('No pod archive yet', 'archive');
+    p.append(
+      n(
+        'p',
+        'Every export holds both sides of the bed, so ask the other sleeper before the first pull (decision Q2). Then install the nightly pull, or run it once from Actions:',
+      ),
+      n('code', 'scripts/install-archive-agent.sh'),
+    );
+    host.replaceChildren(p);
+    return;
+  }
+  const index = pod.index,
+    nights = index?.nights || [],
+    sum = archiveSummary(nights);
+  $('run-meta').textContent = [
+    pod.podId,
+    index ? index.timezone : null,
+    index
+      ? 'index generated ' + new Date(index.generatedAt).toLocaleString()
+      : 'no index',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const out = [];
+  if (pods.length > 1) {
+    const select = n('select');
+    select.setAttribute('aria-label', 'Pod');
+    setOptions(
+      select,
+      pods.map((p) => [p.podId, p.podId]),
+      archivePod,
+    );
+    select.onchange = () => {
+      archivePod = select.value;
+      renderArchive();
+    };
+    out.push(select);
+  }
+  if (pod.pullOverdue) {
+    const alert = panel('Archive pull overdue', 'archive');
+    alert.classList.add('archive-alert');
+    alert.append(
+      n(
+        'p',
+        pod.lastPull
+          ? `The last successful pull was ${pullAge(pod.pullAgeHours)}, more than ${Math.round(archiveDoc.staleAfterHours / 24)} days. The nightly pull has probably stopped (laptop asleep at 12:30, agent unloaded, or a core checkout older than the pod). The pod prunes raw it still holds after about 27 days.`
+          : 'No pull has completed into this archive yet.',
+        'negative',
+      ),
+    );
+    out.push(alert);
+  }
+  const cards = n('div', null, 'scorecards');
+  cards.append(
+    card(
+      'Last successful pull',
+      pullAge(pod.pullAgeHours),
+      pod.lastPull
+        ? new Date(pod.lastPull.pulledAt).toLocaleString() +
+            (pod.lastPull.raw ? ` · ${pod.lastPull.raw.new ?? 0} new raw` : '')
+        : 'pulls/*.json',
+      'archive',
+    ),
+    card(
+      'Nights archived',
+      `${sum.archived} / ${sum.nights}`,
+      'raw on this computer',
+    ),
+    card('At risk', String(sum.atRisk), 'raw only on the pod, pruned next'),
+    card('Lost', String(sum.lost), 'raw pruned before archiving'),
+    card('Locked holdout', String(sum.locked), 'nights kept unseen', 'holdout'),
+    card(
+      'Missing a teacher',
+      String(sum.missingTeacher),
+      'nights without every Watch teacher',
+      'watchTeachers',
+    ),
+  );
+  const status = panel('Sync', 'archive');
+  status.append(cards);
+  const sync = archiveDoc.sync,
+    lines = [];
+  if (archiveDoc.lock)
+    lines.push(
+      'A pull is running now' +
+        (archiveDoc.lock.host ? ' on ' + archiveDoc.lock.host : '') +
+        (archiveDoc.lock.startedAt
+          ? ' since ' + new Date(archiveDoc.lock.startedAt).toLocaleTimeString()
+          : '') +
+        '.',
+    );
+  if (sync) {
+    lines.push(
+      `This workspace pulls when it opens and every ${sync.intervalHours} h while open; next check ${new Date(sync.nextAt * 1000).toLocaleTimeString()}.`,
+    );
+    if (sync.last)
+      lines.push(
+        `Last check ${new Date(sync.last.at * 1000).toLocaleTimeString()}: ${sync.last.outcome}${sync.last.outcome === 'started' ? ' job ' : ' · '}${sync.last.detail}.`,
+      );
+  } else lines.push('Pull on open is off (--no-sync) or unavailable.');
+  if (pod.indexBehind)
+    lines.push(
+      'The index is older than the last pull; rebuild it to see new nights.',
+    );
+  if (pod.indexProblem)
+    lines.push(
+      pod.indexProblem === 'missing'
+        ? 'No index.json yet: rebuild the index to list nights.'
+        : 'index.json has an unsupported version; rebuild it.',
+    );
+  for (const line of lines) status.append(n('p', line));
+  if (jobToken) {
+    const row = n('div', null, 'job-submit'),
+      pull = n('button', 'Pull now'),
+      rebuild = n('button', 'Rebuild index');
+    pull.onclick = () => archiveJob('archive-pull', {});
+    rebuild.onclick = () =>
+      archiveJob('archive-index', {
+        archive: pod.path,
+        timezone: index?.timezone,
+      });
+    pull.disabled = rebuild.disabled = !!jobState.active || !!archiveDoc.lock;
+    rebuild.disabled ||= !index?.timezone;
+    if (!index?.timezone)
+      rebuild.title = 'The first index needs a timezone: use Actions';
+    row.append(pull, rebuild, n('span', archiveMessage, 'negative'));
+    status.append(row);
+  }
+  out.push(status);
+  if (nights.length) {
+    const coverage = panel('Watch coverage per teacher', 'watchTeachers'),
+      t1 = n('table');
+    table(
+      t1,
+      ['Teacher', 'Pod rows', 'Sidecar', 'Missing'],
+      teacherCoverage(nights),
+    );
+    const scroll1 = n('div', null, 'table-scroll');
+    scroll1.append(t1);
+    coverage.append(scroll1);
+    const lineage = panel('Vitals lineage', 'lineage'),
+      t2 = n('table');
+    table(t2, ['Engine / profile', 'Nights'], lineageCounts(nights));
+    const scroll2 = n('div', null, 'table-scroll');
+    scroll2.append(t2);
+    lineage.append(
+      scroll2,
+      n(
+        'p',
+        `${sum.mixed} night${sum.mixed === 1 ? '' : 's'} processed by more than one version.`,
+        'footnote',
+      ),
+    );
+    const grid = n('div', null, 'grid');
+    grid.append(coverage, lineage);
+    out.push(grid);
+    const list = panel('Nights', 'archive'),
+      t3 = n('table');
+    table(
+      t3,
+      [
+        'Night',
+        'Side',
+        'In bed',
+        'Raw',
+        'Raw source',
+        'Watch',
+        'Vitals',
+        'Holdout',
+        'Risk',
+      ],
+      archiveNights(nights).map((night) => [
+        night.night,
+        night.side,
+        fmt(night.inBedHours, 1) + ' h',
+        pct(night.raw?.coverage),
+        rawSource(night.raw?.source),
+        watchCell(night.watch),
+        vitalsLabel(night.lineage?.vitals),
+        night.locked ? 'locked' : '',
+        night.atRisk === true ? 'AT RISK' : night.atRisk == null ? '?' : '',
+      ]),
+    );
+    const scroll3 = n('div', null, 'table-scroll');
+    scroll3.append(t3);
+    list.append(
+      scroll3,
+      n(
+        'p',
+        'Watch: S stages, H heart rate, B breathing, V HRV, M motion; capital = pod rows, lower case = sidecar, . = missing. Locked nights stay listed so they get archived; no scores are shown here.',
+        'footnote',
+      ),
+    );
+    out.push(list);
+  }
+  host.replaceChildren(...out);
 }
 // ---- Actions: allow-listed jobs run by the live workspace ----
 const jobToken = embedded.jobToken || null;
@@ -3552,7 +3910,12 @@ async function pollJobs() {
   try {
     const r = await fetch('/api/jobs', jobRequest(jobToken));
     if (!r.ok) throw Error();
+    const wasActive = jobState.active;
     jobState = await r.json();
+    if (task === 'archive' && wasActive !== jobState.active) {
+      archiveText = '';
+      showArchive();
+    }
     for (const a of jobState.actions)
       glossary['action:' + a.id] = [a.label, a.description];
     if (!jobId && jobState.jobs.length) jobId = jobState.jobs[0].id;
@@ -3665,6 +4028,14 @@ document.querySelectorAll('[data-task]').forEach((b) => {
   b.onclick = () => {
     if (task === b.dataset.task) return;
     task = b.dataset.task;
+    if (task === 'archive') {
+      runId = null;
+      doc = null;
+      renderRuns();
+      $('empty').classList.add('hidden');
+      showArchive();
+      return;
+    }
     renderRuns();
     const first = runs.find((r) => runTask(r) === task);
     if (first) selectRun(first.id);
@@ -3706,8 +4077,14 @@ if (offline) {
       true;
   $('run-count').textContent = '1';
 } else {
+  if (new URLSearchParams(location.hash.slice(1)).get('task') === 'archive') {
+    task = 'archive';
+    renderTaskSwitch();
+    showArchive();
+  }
   poll();
   setInterval(poll, 2000);
+  setInterval(showArchive, 30000);
   if (jobToken) {
     $('open-actions').hidden = false;
     pollJobs();

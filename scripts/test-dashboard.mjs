@@ -24,7 +24,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   script +
-    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,jobRequest,jobParams,tailText,jobIndicator,jobElapsed,setDoc:value=>{doc=value}}',
+    ';globalThis.testAPI={metrics,sumCM,sharedEpochs,duration,isoWeek,weeklyNights,weeklySummary,tabs,runTask,movementRows,segments,snoreRiseRows,nightRuns,extent,taskOf,phoneTimeline,phoneOverlay,snoreLabelSummary,phoneWindowSummary,renderSnoreNight,lockedNight,folds,score,renderFolds,miniNights,jobRequest,jobParams,tailText,jobIndicator,jobElapsed,vitalsLabel,watchCell,archiveNights,archiveSummary,teacherCoverage,lineageCounts,pullAge,rawSource,setDoc:value=>{doc=value}}',
   context,
 );
 const {
@@ -445,6 +445,43 @@ test('job indicator names the running job, else the last status', () => {
 test('the workspace script never calls pod model or device routes', () => {
   const source = readFileSync(new URL('./ui/dashboard.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /sleep-stages\/model|watch-upload|\/api\/device|method: '(PUT|DELETE|PATCH)'/);
-  assert.deepEqual([...source.matchAll(/fetch\(\s*'([^']+)'/g)].map((m) => m[1]).filter((u) => !u.startsWith('/api/runs')),
-    ['/api/jobs/', '/api/jobs', '/api/jobs', '/api/jobs/']);
+  const urls = new Set([...source.matchAll(/fetch\(\s*'([^']+)'/g)].map((m) => m[1]).filter((u) => !u.startsWith('/api/runs')));
+  assert.deepEqual([...urls].sort(), ['/api/archive', '/api/jobs', '/api/jobs/']);
+});
+const night = (n, side, extra = {}) => ({
+  night: n, side, enteredBedAt: Date.parse(n) / 1000, inBedHours: 8, locked: false, atRisk: false,
+  raw: { coverage: 1, source: 'archive' }, watchMissing: [],
+  watch: { stages: { source: 'pod' }, heartRate: { source: 'pod' }, breathingRate: { source: 'sidecar' }, hrvSdnn: { source: null }, motion: { source: 'pod' } },
+  lineage: { vitals: { identity: 'v1', engine: 'piezo-v12345678', profile: 'live', mixed: false, versions: [{}] } },
+  ...extra,
+});
+test('archive nights list at-risk first, then newest, and count each state', () => {
+  const api = context.testAPI;
+  const nights = [
+    night('2026-11-10', 'left'),
+    night('2026-11-12', 'right', { raw: { coverage: 0, source: 'lost' } }),
+    night('2026-11-12', 'left', { raw: { coverage: 0.5, source: 'local-export:data/raw/a.tar.gz' }, watchMissing: ['hrvSdnn'] }),
+    night('2026-10-20', 'left', { atRisk: true, raw: { coverage: 0, source: 'pod-only' } }),
+    night('2026-11-14', 'left', { locked: true, atRisk: null, raw: { coverage: 0, source: 'pod-only?' },
+      lineage: { vitals: { identity: 'mixed', versions: [{}, {}], unknownMinutes: 3, mixed: true } } }),
+  ];
+  assert.deepEqual(plain(api.archiveNights(nights).map((n) => n.night + ' ' + n.side)),
+    ['2026-10-20 left', '2026-11-14 left', '2026-11-12 left', '2026-11-12 right', '2026-11-10 left']);
+  assert.deepEqual(plain(api.archiveSummary(nights)), { nights: 5, archived: 2, atRisk: 1, lost: 1, locked: 1, missingTeacher: 1, mixed: 1 });
+  assert.deepEqual(plain(api.teacherCoverage(nights))[3], ['HRV (SDNN)', 0, 0, 5]);
+  assert.deepEqual(plain(api.teacherCoverage(nights))[2], ['Breathing rate', 0, 5, 0]);
+  assert.deepEqual(plain(api.lineageCounts(nights)), [['piezo-v1/live', 4], ['mixed (2 + unrecorded)', 1]]);
+});
+test('archive cells mirror the CLI table', () => {
+  const api = context.testAPI;
+  assert.equal(api.watchCell(night('2026-11-10', 'left').watch), 'SHb.M');
+  assert.equal(api.watchCell(undefined), '.....');
+  assert.equal(api.vitalsLabel(null), 'no vitals');
+  assert.equal(api.vitalsLabel({ identity: 'unknown' }), 'unknown');
+  assert.equal(api.rawSource('local-export:data/raw/2026-10-18.tar.gz'), 'local export · 2026-10-18.tar.gz');
+  assert.equal(api.rawSource(null), '—');
+  assert.equal(api.pullAge(null), 'never');
+  assert.equal(api.pullAge(0.2), 'under an hour ago');
+  assert.equal(api.pullAge(5.4), '5 h ago');
+  assert.equal(api.pullAge(80), '3.3 days ago');
 });

@@ -247,6 +247,10 @@ class ValidationTests(unittest.TestCase):
         self.refuse('movement-model-epochs', {**epochs, 'out': 'data/new.csv'}, '.json')
         self.refuse('movement-model-train', {'windows': []}, 'is required')
         self.refuse('movement-model-train', {'windows': ['data/windows.json'] * 21}, 'between 1 and 20')
+        self.refuse('archive-index', {'archive': 'data/features.json', 'timezone': 'UTC'}, 'not a folder')
+        (self.fixture.data / 'archive/pod-a').mkdir(parents=True)
+        self.assertEqual(self.runner.command('archive-index', {'archive': 'data/archive/pod-a', 'timezone': 'UTC'})[0][4:],
+                         ['scripts/archive_index.py', f'--archive={self.fixture.data}/archive/pod-a', '--timezone=UTC'])
         argv = self.runner.command('movement-model-epochs', epochs)[0]
         self.assertEqual(argv[4:7], ['scripts/movement_model.py', 'epochs', str(self.fixture.data / 'features.json')])
         self.assertIn(f'--export=12={self.fixture.data}/session.tar.gz', argv)
@@ -290,17 +294,17 @@ class ValidationTests(unittest.TestCase):
 class NoPodWritesTests(unittest.TestCase):
     """AGENTS.md: uploads, model selection or activation, and pod writes stay manual."""
     SCRIPTS = {'scripts/train.py', 'scripts/stage-backtest.py', 'scripts/fusion.py', 'scripts/vitals_reference.py',
-               'scripts/movement_model.py'}
+               'scripts/movement_model.py', 'scripts/archive_index.py'}
     WRITES = re.compile(r'sleep-stages/model|watch-upload|/api/device|/api/settings|/api/schedules|'
                         r"method\s*=\s*['\"](PUT|POST|PATCH|DELETE)|['\"]-X['\"]|--request", re.I)
     # Reads: GETs of the model library and selection, and the preview route Pod.post is limited to.
-    READS = re.compile(r"pod\.get\('sleep-stages/models?'|sleep-stages/model/preview")
+    READS = re.compile(r"pod\.get\('sleep-stages/models?'|sleep-stages/model/preview|GET /api/sleep-stages/models\?side=")
     # fetch_pod.Pod.post sends POST only to fetch_pod.READ_ONLY_POSTS (test_pod_post_refuses_writes).
     GUARDED_POST = "method='POST')"
 
     def test_action_allow_list_is_fixed(self):
         self.assertEqual(set(ACTIONS), {'train', 'stage-backtest', 'fusion', 'vitals-reference', 'movement-model-train',
-                                        'movement-model-epochs', 'archive-pull'})
+                                        'movement-model-epochs', 'archive-pull', 'archive-index'})
         for key, action in ACTIONS.items():
             self.assertNotRegex(key + action['label'], re.compile('upload|activat|select|promot|deploy', re.I))
             flags = {f['flag'] for f in action['fields']}
