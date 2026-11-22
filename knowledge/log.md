@@ -1,5 +1,9 @@
 # Knowledge update log
 
+## 2026-11-22
+
+- **Creation**: Captured the [Apple Watch validation literature](references/apple-watch-validation.md): 12 papers cited by a public brand comparison, each read and checked; sleep staging rests on one Oura-funded PSG study (κ 0.60, wake sensitivity 52%), and no cited study measured vitals during sleep. Linked from the [validation protocol](evaluation/validation-protocol.md). No model activation.
+
 ## 2026-11-16
 
 - **Creation**: Captured [E2, replayed vs live vitals](evaluation/e2-replayed-vitals-2026-11-16.md): a tie on staging, better breathing agreement. No model export or activation.
