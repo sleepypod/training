@@ -373,6 +373,28 @@ a night-level bootstrap 95% interval (10,000 resamples, seed 42) and a sign-test
 count, over every night in the file that is out of sample for both. Pod reads are
 GETs and the preview only.
 
+## Training loop
+
+Freeze each candidate before the nights that judge it, score it on them once, then let them
+train the next one ([plan](docs/plans/training-loop.md)). `scripts/loop.py` runs locally on a
+run's `features.json` and never contacts a pod:
+
+```sh
+uv run --locked python scripts/loop.py freeze data/runs/RUN/model --label cand-YYYYMMDD
+uv run --locked python scripts/loop.py score data/runs/RUN/features.json
+uv run --locked python scripts/loop.py replay data/runs/RUN/features.json --out data/runs/loop-replay \
+  --frozen id2=data/runs/<id-2 run>/model --frozen id3=data/runs/<id-3 run>/model
+```
+
+`freeze` appends the candidate's SHA-256, training cutoff and `trainedAt` to
+`data/runs/loop/frozen.jsonl`. `score` scores every registered model on development night
+groups after its cutoff, marks a night prospective when all its sessions began after the model
+was trained, and writes `data/runs/loop/scores.json` with paired comparisons (night bootstrap,
+sign test) on all out-of-sample nights and on nights prospective for both. `replay` simulates the
+loop on past nights: refit with `retrain-models.py`'s nested selection every `--cadence` days
+(default 1 and 7) on earlier groups only, and score frozen models after their cutoffs. Locked
+holdout nights are dropped first; a candidate reads them only in its one `--holdout-final`.
+
 ## Multi-source training
 
 Watch signals teach the pod models; they are never stage-model inputs. Watch stages
